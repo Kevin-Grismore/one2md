@@ -15,6 +15,8 @@ import { Page, Section } from './onenote-file/semantic/content';
 import { extensionFromBytes, extensionFromName } from './onenote-file/util';
 import { NameRegistry, sanitizeFileName } from './names';
 import { listSections, readSections, SectionEntry } from './read-section';
+import { CabinetLimits } from './onenote-file/cabinet/cabinet';
+import { ReaderOptions } from './onenote-file/onestore/options';
 
 export interface Sink {
 	write(path: string, data: Uint8Array): Promise<void>;
@@ -32,6 +34,26 @@ export interface ConvertOptions {
 	frontmatter?: boolean;
 	/** Cabinet entry names to convert, for a `.onepkg` holding more than you want. */
 	sections?: ReadonlySet<string>;
+	/**
+	 * The notebook these sections belong to.
+	 *
+	 * A `.onepkg` names its own notebook, but sections extracted from one arrive
+	 * as loose files with that knowledge lost. Naming it restores the folder and
+	 * the front matter, so extracting a large notebook first costs nothing in
+	 * fidelity.
+	 */
+	notebookName?: string;
+	/**
+	 * Size ceilings for the archive. Raising one admits a larger notebook;
+	 * they exist so a malformed or hostile file cannot expand without bound.
+	 */
+	limits?: CabinetLimits;
+	/**
+	 * Structural ceilings for a section. These bound work and memory rather than
+	 * bytes: the default object limit alone admits around a gigabyte of heap for
+	 * one section, so on a small machine it is worth lowering, not raising.
+	 */
+	readerOptions?: ReaderOptions;
 	onProgress?: (event: ProgressEvent) => void;
 	/** Returning true abandons the conversion at the next page boundary. */
 	isCancelled?: () => boolean;
@@ -135,8 +157,8 @@ function frontMatterFor(page: Page, section: string, notebook: string | undefine
 }
 
 /** The sections a file holds, without decoding any of them. */
-export function inspect(data: Uint8Array, fileName: string): SectionEntry[] {
-	return listSections(data, fileName);
+export function inspect(data: Uint8Array, fileName: string, limits?: CabinetLimits): SectionEntry[] {
+	return listSections(data, fileName, limits);
 }
 
 /**
@@ -158,14 +180,19 @@ export async function convertFile(
 
 	let entries;
 	try {
-		entries = readSections(data, fileName, opts.sections?.size ? opts.sections : undefined);
+		entries = readSections(data, fileName, {
+			wanted: opts.sections?.size ? opts.sections : undefined,
+			limits: opts.limits,
+			options: opts.readerOptions,
+		});
 	}
 	catch (error) {
 		report.errors.push(failure(fileName, error));
 		return report;
 	}
 
-	const notebook = entries.length > 1 || entries[0]?.groups.length ? baseName(fileName) : undefined;
+	const notebook = opts.notebookName
+		?? (entries.length > 1 || entries[0]?.groups.length ? baseName(fileName) : undefined);
 	let index = 0;
 
 	for (const entry of entries) {

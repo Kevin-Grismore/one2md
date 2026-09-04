@@ -78,6 +78,59 @@ Which one applies is read from the file header, not guessed from the name. They
 share everything above the storage layer, so a page converts through identical
 code either way.
 
+## Large notebooks and memory
+
+Peak memory is set by the **largest section**, not the notebook, and it is
+dominated by the object graph rather than by bytes — budget roughly **12x a
+section's expanded size**. `--list` reports those sizes without decompressing
+anything, so you can predict the cost before paying it:
+
+```bash
+node dist/one2md.mjs --list notebook.onepkg
+```
+
+A `.onepkg` adds a much larger cost on top. A Cabinet folder is one continuous
+LZX stream, so it is expanded **whole** even when a single section is wanted,
+and the archive stays in memory beside it. `--sections` does not avoid this.
+
+**Extract the archive first.** Any CAB-capable extractor streams it, which turns
+the archive cost into nothing:
+
+```bash
+7zz x notebook.onepkg -o./sections
+node dist/one2md.mjs ./sections -o ./out --notebook "My Notebook"
+```
+
+`--notebook` restores the name the archive would have supplied, so the output is
+byte-identical to converting the `.onepkg` directly. Converting the sections one
+at a time bounds peak to a single section.
+
+Measured on a generated 725 MiB notebook (12 sections of 60.3 MiB, one folder):
+
+| approach | peak |
+|---|---|
+| convert the `.onepkg` directly | 2,791 MiB |
+| `7zz x` to extract it | **4 MiB** |
+| convert one extracted 60.3 MiB section | **688 MiB** |
+
+Extraction is flat in memory — 4 MiB on a 145 MiB archive and 4 MiB on a 725 MiB
+one — so this route scales to notebooks that cannot be expanded in RAM at all.
+
+The caps that stop a runaway archive are adjustable: `--max-entry-bytes`,
+`--max-expanded-bytes`, `--max-entries`, and `--max-objects` (which bounds heap
+per section, and is worth *lowering* on a small machine). Defaults are
+conservative on purpose — they are what stops a malformed file expanding without
+bound.
+
+### What did not work
+
+Copying expanded sections to temporary files so the archive buffer could be
+released was implemented and measured: **it did not lower peak memory** — 1,141
+MiB against 1,144 MiB in memory. The folder is allocated whole before any section
+is decoded, so the high-water mark is already set by the time there is anything
+to release. Forcing a collection first made no difference. It was removed rather
+than shipped as a knob that does nothing.
+
 ## What it will not convert
 
 A rights-protected `.onex` is declined: its contents are encrypted, and nothing

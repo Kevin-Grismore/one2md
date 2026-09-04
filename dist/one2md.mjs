@@ -3963,7 +3963,11 @@ function readSection(data, options = DEFAULT_READER_OPTIONS) {
   }
   return mapSection(readRevisionStore(data, options), options);
 }
-function readSections(data, fallbackName, wanted, limits = DEFAULT_CABINET_LIMITS, options = DEFAULT_READER_OPTIONS) {
+function readSections(data, fallbackName, {
+  wanted,
+  limits = DEFAULT_CABINET_LIMITS,
+  options = DEFAULT_READER_OPTIONS
+} = {}) {
   if (isCompoundFile(data)) {
     const kind = inspectOnex(data);
     throw new OneNoteFormatError(
@@ -3988,7 +3992,13 @@ function readSections(data, fallbackName, wanted, limits = DEFAULT_CABINET_LIMIT
 }
 function listSections(data, fallbackName, limits = DEFAULT_CABINET_LIMITS) {
   if (!isPackage(data)) return [{ name: fallbackName, title: titleOf(fallbackName), groups: [] }];
-  return readCabinetIndex(data, limits).entries.filter((entry) => isSection(entry.name)).map((entry) => ({ name: entry.name, title: titleOf(entry.name), groups: groupsOf(entry.name) }));
+  return readCabinetIndex(data, limits).entries.filter((entry) => isSection(entry.name)).map((entry) => ({
+    name: entry.name,
+    title: titleOf(entry.name),
+    groups: groupsOf(entry.name),
+    folderIndex: entry.folderIndex,
+    expandedLength: entry.length
+  }));
 }
 
 // src/convert-file.ts
@@ -4038,8 +4048,8 @@ function frontMatterFor(page, section, notebook, groups) {
   lines.push("---", "");
   return lines.join("\n");
 }
-function inspect(data, fileName) {
-  return listSections(data, fileName);
+function inspect(data, fileName, limits) {
+  return listSections(data, fileName, limits);
 }
 async function convertFile(data, fileName, sink, options = {}) {
   const opts = { ...DEFAULTS, ...options };
@@ -4047,12 +4057,16 @@ async function convertFile(data, fileName, sink, options = {}) {
   const { names, byContent } = opts.workspace ?? new Workspace();
   let entries;
   try {
-    entries = readSections(data, fileName, opts.sections?.size ? opts.sections : void 0);
+    entries = readSections(data, fileName, {
+      wanted: opts.sections?.size ? opts.sections : void 0,
+      limits: opts.limits,
+      options: opts.readerOptions
+    });
   } catch (error) {
     report.errors.push(failure(fileName, error));
     return report;
   }
-  const notebook = entries.length > 1 || entries[0]?.groups.length ? baseName(fileName) : void 0;
+  const notebook = opts.notebookName ?? (entries.length > 1 || entries[0]?.groups.length ? baseName(fileName) : void 0);
   let index = 0;
   for (const entry of entries) {
     if (opts.isCancelled?.()) {
@@ -4184,6 +4198,7 @@ Options:
   -o, --out <dir>        Where to write (default: ./out)
       --list             List the sections in each input and exit
       --sections <a,b>   Only convert these sections of a .onepkg (by entry name)
+      --notebook <name>  Name the notebook these sections came from
       --dry-run          Report what would be written without writing it
       --overwrite        Replace existing files instead of failing on them
       --no-attachments   Leave images and embedded files out
@@ -4192,6 +4207,10 @@ Options:
       --no-nest          Write subpages beside their parent, not in a folder
       --include-deleted  Include pages still in OneNote's recycle bin
       --json             Emit a machine-readable report on stdout
+      --max-entry-bytes <n>     Largest single section, e.g. 512M (default 512M)
+      --max-expanded-bytes <n>  Largest expanded archive, e.g. 4G (default 2G)
+      --max-entries <n>         Most entries in an archive (default 4096)
+      --max-objects <n>         Most objects per section (default 1000000)
   -q, --quiet            Only report failures
   -h, --help             Show this message
 
@@ -4202,6 +4221,17 @@ Exit codes:
 `;
 var UsageError = class extends Error {
 };
+function parseSize(flag, value) {
+  const match = /^(\d+(?:\.\d+)?)\s*([kmg]?)b?$/i.exec(value.trim());
+  if (!match) throw new UsageError(`${flag} expects a size such as 512M or 4G, not "${value}"`);
+  const scale = { "": 1, k: 1024, m: 1024 * 1024, g: 1024 * 1024 * 1024 }[match[2].toLowerCase()];
+  return Math.floor(Number(match[1]) * scale);
+}
+function parseCount(flag, value) {
+  const count = Number(value);
+  if (!Number.isInteger(count) || count < 1) throw new UsageError(`${flag} expects a whole number, not "${value}"`);
+  return count;
+}
 function parseArgs(argv) {
   const options = {
     inputs: [],
@@ -4234,6 +4264,9 @@ function parseArgs(argv) {
       case "--sections":
         options.sections = new Set(next(arg, argv[++i]).split(",").map((name) => name.trim()).filter(Boolean));
         break;
+      case "--notebook":
+        options.notebook = next(arg, argv[++i]);
+        break;
       case "--dry-run":
         options.dryRun = true;
         break;
@@ -4257,6 +4290,18 @@ function parseArgs(argv) {
         break;
       case "--json":
         options.json = true;
+        break;
+      case "--max-entry-bytes":
+        options.maxEntryBytes = parseSize(arg, next(arg, argv[++i]));
+        break;
+      case "--max-expanded-bytes":
+        options.maxExpandedBytes = parseSize(arg, next(arg, argv[++i]));
+        break;
+      case "--max-entries":
+        options.maxEntries = parseCount(arg, next(arg, argv[++i]));
+        break;
+      case "--max-objects":
+        options.maxObjects = parseCount(arg, next(arg, argv[++i]));
         break;
       case "-q":
       case "--quiet":
@@ -4301,8 +4346,16 @@ var REASONS = {
   protected: "the file is rights-protected, so its contents are encrypted",
   malformed: "the file is damaged or is not a OneNote section",
   limit: "the file exceeds a safety limit for its size or structure",
+  // Overridden per code below; this is the fallback wording.
   unknown: "unexpected failure"
 };
+var ADVICE = {
+  ONENOTE_CAB_ENTRY_LIMIT: "Raise it with --max-entry-bytes, e.g. --max-entry-bytes 2G.",
+  ONENOTE_CAB_EXPANDED_LIMIT: "Raise it with --max-expanded-bytes, e.g. --max-expanded-bytes 6G. Note that a .onepkg expands whole, so this also needs the memory to hold it.",
+  ONENOTE_OBJECT_LIMIT: "Raise it with --max-objects, or convert fewer sections at a time with --sections.",
+  ONENOTE_ASSET_LIMIT: "A page embeds a file larger than the reader will materialize. Convert without it using --no-attachments, or raise the reader's asset ceiling."
+};
+var LIMIT_ADVICE = "Run with --list to see each section and its expanded size, then convert them in batches with --sections.";
 function log(quiet, line) {
   if (!quiet) process.stderr.write(`${line}
 `);
@@ -4313,11 +4366,21 @@ async function main(argv) {
   if (files.length === 0) {
     throw new UsageError("No .one or .onepkg files found in the given paths");
   }
+  const limits = {
+    ...DEFAULT_CABINET_LIMITS,
+    ...options.maxEntryBytes !== void 0 && { maxEntryBytes: options.maxEntryBytes },
+    ...options.maxExpandedBytes !== void 0 && { maxExpandedBytes: options.maxExpandedBytes },
+    ...options.maxEntries !== void 0 && { maxEntries: options.maxEntries }
+  };
+  const readerOptions = {
+    ...DEFAULT_READER_OPTIONS,
+    ...options.maxObjects !== void 0 && { maxObjects: options.maxObjects }
+  };
   if (options.list) {
     const listing = files.map((file) => {
       try {
-        const data = new Uint8Array(nodeFs2.readFileSync(file));
-        return { file, sections: inspect(data, nodePath2.basename(file)) };
+        const data = nodeFs2.readFileSync(file);
+        return { file, sections: inspect(data, nodePath2.basename(file), limits) };
       } catch (error) {
         return { file, sections: [], error: error instanceof Error ? error.message : String(error) };
       }
@@ -4331,7 +4394,9 @@ async function main(argv) {
         if (item.error) process.stdout.write(`  ! ${item.error}
 `);
         for (const section of item.sections) {
-          process.stdout.write(`  ${[...section.groups, section.title].join(" / ")}	${section.name}
+          const size = section.expandedLength === void 0 ? "" : `	${(section.expandedLength / 1024 / 1024).toFixed(1)} MiB`;
+          const folder = section.folderIndex === void 0 ? "" : `	folder ${section.folderIndex}`;
+          process.stdout.write(`  ${[...section.groups, section.title].join(" / ")}	${section.name}${size}${folder}
 `);
         }
       }
@@ -4345,7 +4410,7 @@ async function main(argv) {
     log(options.quiet, `Reading ${file}`);
     let data;
     try {
-      data = new Uint8Array(nodeFs2.readFileSync(file));
+      data = nodeFs2.readFileSync(file);
     } catch (error) {
       reports.push({
         input: file,
@@ -4365,6 +4430,9 @@ async function main(argv) {
       nestSubpages: options.nest,
       frontmatter: options.frontmatter,
       sections: options.sections,
+      notebookName: options.notebook,
+      limits,
+      readerOptions,
       workspace,
       onProgress: (event) => {
         if (event.kind === "section") log(options.quiet, `  section ${event.index}/${event.total}: ${event.name}`);
@@ -4375,6 +4443,11 @@ async function main(argv) {
     log(options.quiet, `  ${report.notes.length} notes, ${report.attachments.length} attachments` + (report.skipped.length ? `, ${report.skipped.length} skipped` : "") + (report.errors.length ? `, ${report.errors.length} failed` : ""));
     for (const error of report.errors) {
       process.stderr.write(`  ! ${error.name}: ${REASONS[error.kind] ?? error.kind} \u2014 ${error.message}
+`);
+      const advice = ADVICE[error.code ?? ""];
+      if (advice) process.stderr.write(`    ${advice}
+`);
+      else if (error.kind === "limit") process.stderr.write(`    ${LIMIT_ADVICE}
 `);
     }
   }

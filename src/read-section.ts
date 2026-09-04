@@ -27,6 +27,24 @@ export interface SectionEntry {
 	title: string;
 	/** The section groups this section sits in, outermost first. */
 	groups: string[];
+	/**
+	 * Which Cabinet folder holds this section, and how large it expands to.
+	 *
+	 * Both come from the archive's index, which costs no decompression. They
+	 * matter because a Cabinet folder is one continuous LZX stream: reaching any
+	 * byte of it means expanding everything before that byte, and the expansion
+	 * is allocated whole. An archive whose sections sit in one folder therefore
+	 * cannot be read a section at a time, however the reader is driven.
+	 */
+	folderIndex?: number;
+	expandedLength?: number;
+}
+
+export interface ReadSectionsOptions {
+	/** Cabinet entry names to read; omit for all of them. */
+	wanted?: ReadonlySet<string>;
+	limits?: CabinetLimits;
+	options?: ReaderOptions;
 }
 
 export interface ReadableSection extends SectionEntry {
@@ -91,9 +109,11 @@ export function readSection(data: Uint8Array, options: ReaderOptions = DEFAULT_R
 export function readSections(
 	data: Uint8Array,
 	fallbackName: string,
-	wanted?: ReadonlySet<string>,
-	limits: CabinetLimits = DEFAULT_CABINET_LIMITS,
-	options: ReaderOptions = DEFAULT_READER_OPTIONS,
+	{
+		wanted,
+		limits = DEFAULT_CABINET_LIMITS,
+		options = DEFAULT_READER_OPTIONS,
+	}: ReadSectionsOptions = {},
 ): ReadableSection[] {
 	if (isCompoundFile(data)) {
 		const kind = inspectOnex(data);
@@ -113,6 +133,11 @@ export function readSections(
 		}];
 	}
 
+	// Every entry is a view into one expanded-folder buffer, so holding any of
+	// them holds all of them. Copying each out to a temporary file so the buffer
+	// could be released was measured and did not lower peak memory: the folder is
+	// allocated whole before any section is decoded, so the high-water mark is
+	// already set by then. See the memory notes in README.md.
 	return readCabinet(data, limits, name => isSection(name) && (!wanted || wanted.has(name)))
 		.map(entry => ({
 			name: entry.name,
@@ -132,5 +157,11 @@ export function listSections(
 
 	return readCabinetIndex(data, limits).entries
 		.filter(entry => isSection(entry.name))
-		.map(entry => ({ name: entry.name, title: titleOf(entry.name), groups: groupsOf(entry.name) }));
+		.map(entry => ({
+			name: entry.name,
+			title: titleOf(entry.name),
+			groups: groupsOf(entry.name),
+			folderIndex: entry.folderIndex,
+			expandedLength: entry.length,
+		}));
 }

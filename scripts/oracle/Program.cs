@@ -29,6 +29,7 @@ if (args.Length == 0) { Console.Error.Write(UsageText); return 2; }
 return args[0] switch {
 	"dump" => Oracle.Dump(args.Skip(1).ToArray()),
 	"write" => FixtureWriter.Run(args.Skip(1).ToArray()),
+	"api" => Oracle.Api(),
 	_ => Oracle.Fail(),
 };
 
@@ -41,6 +42,16 @@ one2md-oracle — structural description of OneNote files, via OfficeIMO
 """;
 
 	internal static int Fail() { Console.Error.Write(UsageText); return 2; }
+
+	internal static int Api() {
+		var a = System.Reflection.Assembly.Load("OfficeIMO.OneNote");
+		var t = a.GetTypes().FirstOrDefault(x => x.Name == "OneNotePackageWriter");
+		Console.WriteLine(t == null ? "OneNotePackageWriter: not public" : $"public: {t.FullName}");
+		if (t != null)
+			foreach (var m in t.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static))
+				Console.WriteLine("   " + m);
+		return 0;
+	}
 
 	internal static int Dump(string[] paths) {
 		if (paths.Length == 0) return Fail();

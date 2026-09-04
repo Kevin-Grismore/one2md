@@ -20,13 +20,15 @@ static class FixtureWriter {
 		"one2md attachment fixture: this file rides through the packaged file-data path.\n"u8.ToArray();
 
 	public static int Run(string[] args) {
-		if (args.Length != 1) {
-			Console.Error.WriteLine("write <output-directory>");
+		if (args.Length == 0) {
+			Console.Error.WriteLine("write <output-directory> [--large [sections] [pagesPerSection] [paragraphsPerPage]]");
 			return 2;
 		}
 
 		var directory = args[0];
 		Directory.CreateDirectory(directory);
+
+		if (args.Contains("--large")) return WriteLarge(directory, args);
 
 		var section = new OneNoteSection { Name = "Attachments" };
 		section.Pages.Add(BuildPage());
@@ -69,5 +71,58 @@ static class FixtureWriter {
 		var paragraph = new OneNoteParagraph();
 		paragraph.Runs.Add(new OneNoteTextRun { Text = value });
 		return paragraph;
+	}
+
+	/// <summary>
+	/// A notebook big enough to measure against.
+	///
+	/// The committed fixtures top out at 176 KiB, four orders of magnitude below a
+	/// real notebook, and peak memory at that size is still dominated by one-time
+	/// JIT. Nothing about memory can be claimed from them, so this generates
+	/// something with a realistic shape: many sections, many pages, real text.
+	///
+	/// Deliberately not committed — it is megabytes of synthetic filler, and it is
+	/// reproducible from this code whenever a measurement is needed.
+	/// </summary>
+	static int WriteLarge(string directory, string[] args) {
+		var numbers = args.Skip(1).Where(a => int.TryParse(a, out _)).Select(int.Parse).ToArray();
+		var sections = numbers.ElementAtOrDefault(0) is > 0 and var s ? s : 12;
+		var pages = numbers.ElementAtOrDefault(1) is > 0 and var p ? p : 60;
+		var paragraphs = numbers.ElementAtOrDefault(2) is > 0 and var t ? t : 40;
+
+		var notebook = new OneNoteNotebook { Name = "Large" };
+
+		for (var index = 0; index < sections; index++) {
+			var section = new OneNoteSection { Name = $"Section {index + 1:D3}" };
+
+			for (var pageIndex = 0; pageIndex < pages; pageIndex++) {
+				var page = new OneNotePage { Title = $"Section {index + 1:D3} Page {pageIndex + 1:D4}", Level = 0 };
+				var outline = new OneNoteOutline();
+
+				for (var line = 0; line < paragraphs; line++) {
+					outline.Children.Add(Text(
+						$"Section {index + 1} page {pageIndex + 1} paragraph {line + 1}. "
+						+ "Filler that compresses like prose rather than like zeroes, so the "
+						+ "archive's expanded size bears some relation to a real notebook's."));
+				}
+
+				page.Outlines.Add(outline);
+				section.Pages.Add(page);
+			}
+
+			notebook.Sections.Add(section);
+		}
+
+		var path = Path.Combine(directory, "large.onepkg");
+		// StorageFormat describes how each *section* is serialized; the package
+		// writer decides the Cabinet wrapper on its own.
+		OneNotePackageWriter.Write(notebook, path, new OneNoteWriterOptions {
+			StorageFormat = OneNoteStorageFormat.RevisionStore,
+			MaxOutputBytes = 8L * 1024 * 1024 * 1024,
+		});
+
+		var size = new FileInfo(path).Length;
+		Console.WriteLine($"{path}\t{size:N0} bytes\t{sections} sections x {pages} pages x {paragraphs} paragraphs");
+		return 0;
 	}
 }
