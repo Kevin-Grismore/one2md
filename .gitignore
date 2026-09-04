@@ -6,3 +6,6 @@ out/
 # Inputs you drop in yourself. Nothing here is committed, and nothing
 # about them leaves the machine.
 tests/local/
+
+# Built by `npm run skill:zip`, for uploading to Customize > Skills.
+dist/onenote-to-markdown.zip

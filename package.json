@@ -19,7 +19,8 @@
     "test": "node scripts/test.mjs",
     "typecheck": "tsc --noEmit",
     "start": "tsx src/cli.ts",
-    "verify:upstream": "tsx scripts/verify-upstream.mjs"
+    "verify:upstream": "tsx scripts/verify-upstream.mjs",
+    "skill:zip": "npm run build && cd skills && rm -f ../dist/onenote-to-markdown.zip && zip -qr ../dist/onenote-to-markdown.zip onenote-to-markdown -x \"*.DS_Store\""
   },
   "devDependencies": {
     "@types/node": "22.10.2",
