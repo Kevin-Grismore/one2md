@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A development-only oracle. Nothing here ships: the one2md deliverable stays
+    a single dependency-free Node file. This exists so the packaged (web export)
+    conversion path can be checked against an independent implementation, which
+    is the one thing our own recordings cannot do.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>one2md-oracle</AssemblyName>
+    <RootNamespace>One2Md.Oracle</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="OfficeIMO.OneNote" Version="3.3.0" />
+    <PackageReference Include="OfficeIMO.OneNote.Markdown" Version="3.3.0" />
+  </ItemGroup>
+
+</Project>

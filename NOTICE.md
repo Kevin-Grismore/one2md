@@ -48,6 +48,14 @@ MPL-2.0, which is file-level copyleft, and code derived from it could not be
 distributed under this repository's MIT licence. Anyone extending
 `src/fsshttpb/` should keep that separation.
 
+## The development oracle — OfficeIMO (MIT)
+
+`scripts/oracle/` is a small .NET console project referencing the
+`OfficeIMO.OneNote` and `OfficeIMO.OneNote.Markdown` NuGet packages. It exists
+only so `npm run verify:officeimo` can check this converter against an
+independent implementation of the same formats. Nothing from it is shipped, and
+the published `dist/one2md.mjs` has no .NET dependency of any kind.
+
 ## Test inputs
 
 `tests/fixtures/` holds binary OneNote sections and Cabinet archives copied from

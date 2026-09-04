@@ -158,6 +158,17 @@ To convert a file you cannot commit — your own export — drop it in
 `tests/local/`. It is gitignored, its recording is written to
 `tests/local/expected/`, and nothing about it leaves the machine.
 
+**Against a second implementation.** `npm run verify:officeimo` reads every
+fixture with [OfficeIMO](https://github.com/EvotecIT/OfficeIMO) (C#, MIT) and
+compares section names, page order, page titles, the words each page carries,
+and attachment bytes by SHA-256. This is what anchors the **web-export** path:
+unlike the desktop trees, its recordings have no upstream to check against.
+
+It is development-only — it needs the .NET SDK, skips cleanly without it, and
+nothing it touches is shipped. Markdown styling and timestamps are excluded by
+design, and per-file divergences are listed with reasons in the script rather
+than silently tolerated.
+
 ### Re-syncing the parser
 
 ```bash
