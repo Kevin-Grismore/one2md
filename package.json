@@ -1,6 +1,6 @@
 {
   "name": "one2md",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Convert OneNote .one and .onepkg files to Markdown, entirely offline.",
   "license": "MIT",
   "type": "module",
