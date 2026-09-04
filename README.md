@@ -78,6 +78,58 @@ Which one applies is read from the file header, not guessed from the name. They
 share everything above the storage layer, so a page converts through identical
 code either way.
 
+## Large notebooks and memory
+
+Peak memory is set by the **largest section**, not the notebook, and it is
+dominated by the object graph rather than by bytes. Measured on generated
+notebooks:
+
+| what | peak |
+|---|---|
+| a 9 MiB section | 188 MiB |
+| a 36 MiB section | 492 MiB |
+
+So budget roughly **12-15x a section's expanded size**, and use `--list` to see
+those sizes before converting:
+
+```bash
+node dist/one2md.mjs --list notebook.onepkg
+```
+
+It prints each section's expanded size and its Cabinet folder, and costs no
+decompression.
+
+A `.onepkg` adds a second, larger cost. A Cabinet folder is one continuous LZX
+stream, so it is expanded **whole** even when a single section is wanted — and
+the archive stays in memory alongside it. Converting one 3.6 MiB section out of
+a 145 MiB notebook still peaked at 412 MiB, against 188 MiB just to list it. The
+floor for any `.onepkg` is therefore about **twice the notebook's expanded
+size**, before conversion begins, and `--sections` does not avoid it.
+
+If a notebook is too large, extract it first and convert the sections as loose
+`.one` files — that skips the archive cost entirely, since each section is then
+read on its own:
+
+```bash
+7z x notebook.onepkg -o./sections    # any CAB-capable extractor
+node dist/one2md.mjs ./sections -o ./out
+```
+
+The caps that stop a runaway archive are adjustable: `--max-entry-bytes`,
+`--max-expanded-bytes`, `--max-entries`, and `--max-objects` (which bounds heap
+per section, and is worth *lowering* on a small machine). Defaults are
+conservative on purpose — they are what stops a malformed file expanding without
+bound.
+
+### What did not work
+
+Copying expanded sections to temporary files so the archive buffer could be
+released was implemented and measured: **it did not lower peak memory**
+(1141 MiB against 1144 MiB in memory). The folder is allocated whole before any
+section is decoded, so the high-water mark is already set by the time there is
+anything to release. It was removed rather than shipped as a knob that does
+nothing.
+
 ## What it will not convert
 
 A rights-protected `.onex` is declined: its contents are encrypted, and nothing

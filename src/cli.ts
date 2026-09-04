@@ -8,6 +8,8 @@ import * as nodeFs from 'node:fs';
 import * as nodePath from 'node:path';
 
 import { ConversionReport, convertFile, inspect, Workspace } from './convert-file';
+import { CabinetLimits, DEFAULT_CABINET_LIMITS } from './onenote-file/cabinet/cabinet';
+import { DEFAULT_READER_OPTIONS, ReaderOptions } from './onenote-file/onestore/options';
 import { OneNoteFormatError } from './onenote-file/errors';
 import { FsSink, NullSink } from './sinks';
 
@@ -30,6 +32,10 @@ Options:
       --no-nest          Write subpages beside their parent, not in a folder
       --include-deleted  Include pages still in OneNote's recycle bin
       --json             Emit a machine-readable report on stdout
+      --max-entry-bytes <n>     Largest single section, e.g. 512M (default 512M)
+      --max-expanded-bytes <n>  Largest expanded archive, e.g. 4G (default 2G)
+      --max-entries <n>         Most entries in an archive (default 4096)
+      --max-objects <n>         Most objects per section (default 1000000)
   -q, --quiet            Only report failures
   -h, --help             Show this message
 
@@ -53,9 +59,28 @@ interface Options {
 	includeDeleted: boolean;
 	json: boolean;
 	quiet: boolean;
+	maxEntryBytes?: number;
+	maxExpandedBytes?: number;
+	maxEntries?: number;
+	maxObjects?: number;
 }
 
 class UsageError extends Error {}
+
+/** A byte count, plain or with a K/M/G suffix. */
+function parseSize(flag: string, value: string): number {
+	const match = /^(\d+(?:\.\d+)?)\s*([kmg]?)b?$/i.exec(value.trim());
+	if (!match) throw new UsageError(`${flag} expects a size such as 512M or 4G, not "${value}"`);
+
+	const scale = { '': 1, k: 1024, m: 1024 * 1024, g: 1024 * 1024 * 1024 }[match[2].toLowerCase()]!;
+	return Math.floor(Number(match[1]) * scale);
+}
+
+function parseCount(flag: string, value: string): number {
+	const count = Number(value);
+	if (!Number.isInteger(count) || count < 1) throw new UsageError(`${flag} expects a whole number, not "${value}"`);
+	return count;
+}
 
 function parseArgs(argv: string[]): Options {
 	const options: Options = {
@@ -86,6 +111,10 @@ function parseArgs(argv: string[]): Options {
 			case '--no-nest': options.nest = false; break;
 			case '--include-deleted': options.includeDeleted = true; break;
 			case '--json': options.json = true; break;
+			case '--max-entry-bytes': options.maxEntryBytes = parseSize(arg, next(arg, argv[++i])); break;
+			case '--max-expanded-bytes': options.maxExpandedBytes = parseSize(arg, next(arg, argv[++i])); break;
+			case '--max-entries': options.maxEntries = parseCount(arg, next(arg, argv[++i])); break;
+			case '--max-objects': options.maxObjects = parseCount(arg, next(arg, argv[++i])); break;
 			case '-q': case '--quiet': options.quiet = true; break;
 			case '-h': case '--help': process.stdout.write(USAGE); process.exit(0); break;
 			default:
@@ -132,8 +161,27 @@ const REASONS: Record<string, string> = {
 	protected: 'the file is rights-protected, so its contents are encrypted',
 	malformed: 'the file is damaged or is not a OneNote section',
 	limit: 'the file exceeds a safety limit for its size or structure',
+	// Overridden per code below; this is the fallback wording.
 	unknown: 'unexpected failure',
 };
+
+/**
+ * What to do about a specific limit.
+ *
+ * A cap that stops a conversion is only useful if the message says which knob
+ * lifts it. These exist because "exceeds a safety limit" told nobody anything.
+ */
+const ADVICE: Record<string, string> = {
+	ONENOTE_CAB_ENTRY_LIMIT: 'Raise it with --max-entry-bytes, e.g. --max-entry-bytes 2G.',
+	ONENOTE_CAB_EXPANDED_LIMIT: 'Raise it with --max-expanded-bytes, e.g. --max-expanded-bytes 6G. '
+		+ 'Note that a .onepkg expands whole, so this also needs the memory to hold it.',
+	ONENOTE_OBJECT_LIMIT: 'Raise it with --max-objects, or convert fewer sections at a time with --sections.',
+	ONENOTE_ASSET_LIMIT: 'A page embeds a file larger than the reader will materialize. '
+		+ 'Convert without it using --no-attachments, or raise the reader\'s asset ceiling.',
+};
+
+const LIMIT_ADVICE = 'Run with --list to see each section and its expanded size, '
+	+ 'then convert them in batches with --sections.';
 
 function log(quiet: boolean, line: string): void {
 	if (!quiet) process.stderr.write(`${line}\n`);
@@ -147,11 +195,25 @@ async function main(argv: string[]): Promise<number> {
 		throw new UsageError('No .one or .onepkg files found in the given paths');
 	}
 
+	// Only the caps the user actually named are overridden; the rest keep the
+	// reader's defaults, which exist to stop a malformed archive expanding without
+	// bound.
+	const limits: CabinetLimits = {
+		...DEFAULT_CABINET_LIMITS,
+		...(options.maxEntryBytes !== undefined && { maxEntryBytes: options.maxEntryBytes }),
+		...(options.maxExpandedBytes !== undefined && { maxExpandedBytes: options.maxExpandedBytes }),
+		...(options.maxEntries !== undefined && { maxEntries: options.maxEntries }),
+	};
+	const readerOptions: ReaderOptions = {
+		...DEFAULT_READER_OPTIONS,
+		...(options.maxObjects !== undefined && { maxObjects: options.maxObjects }),
+	};
+
 	if (options.list) {
 		const listing = files.map(file => {
 			try {
-				const data = new Uint8Array(nodeFs.readFileSync(file));
-				return { file, sections: inspect(data, nodePath.basename(file)) };
+				const data = nodeFs.readFileSync(file);
+				return { file, sections: inspect(data, nodePath.basename(file), limits) };
 			}
 			catch (error) {
 				return { file, sections: [], error: error instanceof Error ? error.message : String(error) };
@@ -164,7 +226,11 @@ async function main(argv: string[]): Promise<number> {
 				process.stdout.write(`${item.file}\n`);
 				if (item.error) process.stdout.write(`  ! ${item.error}\n`);
 				for (const section of item.sections) {
-					process.stdout.write(`  ${[...section.groups, section.title].join(' / ')}\t${section.name}\n`);
+					const size = section.expandedLength === undefined
+						? ''
+						: `\t${(section.expandedLength / 1024 / 1024).toFixed(1)} MiB`;
+					const folder = section.folderIndex === undefined ? '' : `\tfolder ${section.folderIndex}`;
+					process.stdout.write(`  ${[...section.groups, section.title].join(' / ')}\t${section.name}${size}${folder}\n`);
 				}
 			}
 		}
@@ -183,7 +249,7 @@ async function main(argv: string[]): Promise<number> {
 
 		let data: Uint8Array;
 		try {
-			data = new Uint8Array(nodeFs.readFileSync(file));
+			data = nodeFs.readFileSync(file);
 		}
 		catch (error) {
 			reports.push({
@@ -202,6 +268,8 @@ async function main(argv: string[]): Promise<number> {
 			nestSubpages: options.nest,
 			frontmatter: options.frontmatter,
 			sections: options.sections,
+			limits,
+			readerOptions,
 			workspace,
 			onProgress: event => {
 				if (event.kind === 'section') log(options.quiet, `  section ${event.index}/${event.total}: ${event.name}`);
@@ -217,6 +285,9 @@ async function main(argv: string[]): Promise<number> {
 
 		for (const error of report.errors) {
 			process.stderr.write(`  ! ${error.name}: ${REASONS[error.kind] ?? error.kind} — ${error.message}\n`);
+			const advice = ADVICE[error.code ?? ''];
+			if (advice) process.stderr.write(`    ${advice}\n`);
+			else if (error.kind === 'limit') process.stderr.write(`    ${LIMIT_ADVICE}\n`);
 		}
 	}
 

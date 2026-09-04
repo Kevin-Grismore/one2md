@@ -50,6 +50,31 @@ notebook, or when the person only wants part of it — then pass
 
 `--dry-run` reports what would be written without writing anything.
 
+## Large notebooks
+
+Peak memory is set by the **largest section**, not the notebook — budget roughly
+**12-15x a section's expanded size**. `--list` reports those sizes without
+decompressing anything, so check before converting something big:
+
+```bash
+node one2md.mjs --list notebook.onepkg
+```
+
+A `.onepkg` costs more again: its Cabinet folder expands **whole** even for one
+section, and the archive stays in memory beside it, so the floor is about twice
+the notebook's expanded size. `--sections` does not avoid that.
+
+If a notebook is too large for the machine, extract it first and convert the
+sections as loose files — this skips the archive cost entirely:
+
+```bash
+7z x notebook.onepkg -o./sections
+node one2md.mjs ./sections -o ./out
+```
+
+Then convert in batches if even that is too much, using the names `--list`
+printed. Output from several runs merges into one `-o` directory.
+
 ## Options worth knowing
 
 | Need | Flag |
@@ -59,6 +84,8 @@ notebook, or when the person only wants part of it — then pass
 | Subpages beside their parent, not nested in a folder | `--no-nest` |
 | Pages still in OneNote's recycle bin | `--include-deleted` |
 | Re-run into a folder that already has output | `--overwrite` |
+| Raise a size ceiling a big archive trips | `--max-entry-bytes`, `--max-expanded-bytes` |
+| Bound memory per section on a small machine | `--max-objects` (lower it) |
 
 By default each note gets YAML front matter with `title`, `onenote-id`,
 `section`, `created` and `updated`. Images, ink (as SVG) and embedded files land
@@ -73,6 +100,12 @@ fall back to reading the bytes yourself — these are real limits, not glitches.
   are encrypted. Nothing can be recovered from it here.
 - **`ONENOTE_ONEX_UNSUPPORTED`** — a compound `.onex` this reader does not
   recognise.
+- **`ONENOTE_CAB_ENTRY_LIMIT` / `ONENOTE_CAB_EXPANDED_LIMIT`** — the archive is
+  larger than the default ceilings. The converter prints which flag lifts each
+  one; also consider extracting the `.onepkg` first, as above.
+- **`ONENOTE_OBJECT_LIMIT`** — a section holds more objects than the reader will
+  build. Convert fewer sections at a time, or raise `--max-objects` if there is
+  memory for it.
 - **Anything else** — the file is damaged, or is not a OneNote section.
 
 A failure is reported per section, so a notebook with one bad section still
