@@ -246,6 +246,26 @@ export class Cursor {
 		return items;
 	}
 
+	/** [MS-FSSHTTPB] 2.2.1.11 — a counted array of cell identifiers. */
+	readCellIdArray(): CellId[] {
+		const count = this.readCompactUint();
+		const items: CellId[] = [];
+		for (let index = 0; index < count; index++) items.push(this.readCellId());
+		return items;
+	}
+
+	/**
+	 * [MS-FSSHTTPB] 2.2.1.3 — a binary item: a compact length, then that many
+	 * bytes.
+	 *
+	 * The length is carried explicitly, so an item is not simply the rest of the
+	 * structure it sits in — reading it that way happens to work only when the
+	 * item is last, and silently absorbs whatever follows when it is not.
+	 */
+	readBinaryItem(): Uint8Array {
+		return this.readBytes(this.readCompactUint());
+	}
+
 	/**
 	 * [MS-FSSHTTPB] 2.2.1.5 — a stream object header, in any of its four forms.
 	 *

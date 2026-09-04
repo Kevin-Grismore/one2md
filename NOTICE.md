@@ -31,6 +31,23 @@ the conversion tests are anchored.
 `tests/cabinet.test.ts` is upstream's `tests/onenote-file/cabinet.test.ts`, with
 import paths and `__dirname` adjusted for ESM.
 
+## The packaged-section reader — written here, guided by OfficeIMO (MIT)
+
+`src/fsshttpb/` is not vendored. It is written for this repository against
+[MS-FSSHTTPB], which Microsoft publishes under the Open Specification Promise.
+
+Where the specification is spread across many small pages, the field order and
+the object-partition semantics were checked against
+[OfficeIMO](https://github.com/EvotecIT/OfficeIMO) (MIT) — specifically
+`OfficeIMO.OneNote/Internal/OneStore/OneNotePackageStoreReader*.cs`. That is the
+same project the vendored `onestore/revision-store.ts` credits for the desktop
+reader, and its licence is compatible with this one.
+
+`onenote.rs` also reads this format and was deliberately **not** consulted: it is
+MPL-2.0, which is file-level copyleft, and code derived from it could not be
+distributed under this repository's MIT licence. Anyone extending
+`src/fsshttpb/` should keep that separation.
+
 ## Test inputs
 
 `tests/fixtures/` holds binary OneNote sections and Cabinet archives copied from
