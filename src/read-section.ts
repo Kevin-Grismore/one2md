@@ -66,6 +66,11 @@ export function readSection(data: Uint8Array, options: ReaderOptions = DEFAULT_R
 	if (header.storageFormat === 'file-synchronization-package') {
 		// `mapSection` reads only the graph. The remaining fields exist to
 		// satisfy the shape a desktop store has; nothing consumes them.
+		//
+		// That is true of the pinned upstream commit, not a promise upstream has
+		// made. `verify:upstream` converts a packaged fixture after every sync so
+		// a change that starts reading `root` or `lists` fails there rather than
+		// silently emptying the web-export path.
 		return mapSection({
 			header,
 			root: { id: 0, nodes: [] },
