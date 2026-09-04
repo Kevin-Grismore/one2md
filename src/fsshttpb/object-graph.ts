@@ -34,7 +34,7 @@ import {
 } from '../onenote-file/onestore/objects';
 import { DEFAULT_READER_OPTIONS, ReaderOptions } from '../onenote-file/onestore/options';
 import { readPropertySet } from '../onenote-file/onestore/property-set';
-import { readString } from '../onenote-file/semantic/properties';
+import { readData, readString } from '../onenote-file/semantic/properties';
 import { Property } from '../onenote-file/semantic/schema';
 import { CellId, ExtendedGuid, extendedGuidKey, isNullExtendedGuid, NIL_GUID } from './binary';
 import { DataElementPackage, ObjectData, ObjectGroup, readDataElementPackage } from './package';
@@ -334,7 +334,7 @@ export function buildObjectGraph(
 
 				// A packaged file-data object carries its reference as a property
 				// rather than in a declaration of its own.
-				record.fileDataReference = readString(record, Property.fileDataReference);
+				record.fileDataReference = fileDataReferenceOf(record);
 				record.fileExtension = readString(record, Property.fileDataExtension);
 			}
 
@@ -349,6 +349,32 @@ export function buildObjectGraph(
 	}
 
 	return graph;
+}
+
+/**
+ * The file-data reference an object carries, in the form the rest of the
+ * reader expects.
+ *
+ * The desktop encoding stores this as the string `<ifndf>{GUID}`. The packaged
+ * encoding stores the sixteen bytes of the GUID directly, which read as a
+ * string is mojibake — six CJK characters, not a reference. Both are
+ * normalized to the string form here so the vendored file-data resolver works
+ * unchanged for either.
+ *
+ * The GUID is an identity of its own; it does not equal the id of the data
+ * element holding the bytes. Those are linked through the object that declares
+ * both, not by matching GUIDs.
+ */
+function fileDataReferenceOf(record: RevisionStoreObject): string | undefined {
+	const raw = readData(record, Property.fileDataReference);
+
+	if (raw?.length === 16) {
+		const hex = [...raw].map(byte => byte.toString(16).padStart(2, '0'));
+		const at = (...order: number[]) => order.map(index => hex[index]).join('');
+		return `<ifndf>{${at(3, 2, 1, 0)}-${at(5, 4)}-${at(7, 6)}-${at(8, 9)}-${at(10, 11, 12, 13, 14, 15)}}`;
+	}
+
+	return readString(record, Property.fileDataReference);
 }
 
 /** `<ifndf>{GUID}` names a file in the data store; anything else names nothing. */

@@ -121,3 +121,28 @@ test('both encodings produce the same shape of section', () => {
 		}
 	}
 });
+
+test('a packaged section carries its attachments through the file-data path', () => {
+	// The path this exercises was written but never executed until this fixture
+	// existed, and it held two defects: the object-data BLOB element type, and
+	// the packaged form of a file-data reference. Neither published web export
+	// embeds a file, so nothing else can catch a regression here.
+	const graph = buildObjectGraph(fixture('packagedWithAttachments.one'));
+
+	assert.equal(graph.fileDataObjects.length, 2, 'both payloads reached the graph');
+
+	const sizes = graph.fileDataObjects.map(item => item.payload.length).sort((a, b) => a - b);
+	assert.deepEqual(sizes, [70, 80], 'a 1x1 PNG and a small text file');
+
+	for (const item of graph.fileDataObjects) {
+		assert.match(item.referenceId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+			'a packaged file-data reference normalizes to a bare GUID');
+	}
+
+	// The reference must round-trip through the vendored resolver's format.
+	const referenced = graph.objects.filter(object => object.fileDataReference);
+	assert.equal(referenced.length, 2);
+	for (const object of referenced) {
+		assert.match(object.fileDataReference!, /^<ifndf>\{[0-9a-f-]{36}\}$/);
+	}
+});

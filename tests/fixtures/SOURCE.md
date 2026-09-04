@@ -53,6 +53,19 @@ proves agreement with Microsoft's compressor rather than with a recording.
   contents were authored by OfficeIMO's writer, so it anchors the container and
   not the semantics.
 
+## The packaged section with attachments — generated here, MIT
+
+`packagedWithAttachments.one` is not copied from anywhere. It was written by
+OfficeIMO's `OneNoteSectionWriter` in the packaged (MS-FSSHTTPB) encoding via
+`scripts/oracle`, with a 1x1 PNG and a small text file attached, and is
+therefore this project's own bytes under its own licence.
+
+It exists because no published web-export fixture embeds a file, which left the
+packaged file-data path written but never executed. Generating the missing case
+found two real defects in it: the object-data BLOB element type, and the fact
+that a packaged file-data reference is sixteen raw GUID bytes rather than the
+`<ifndf>{...}` string the desktop encoding uses.
+
 ## Hashes
 
 | File | Size | SHA-256 |
@@ -62,4 +75,5 @@ proves agreement with Microsoft's compressor rather than with a recording.
 | `testOneNoteEmbeddedWordDoc.one` | 33,096 | `cf38e39cb5ced46f377c832e5ff0fa5e789945930f77c294ba5e866429a2a028` |
 | `testOneNoteFromOffice365.one` | 29,387 | `093f20ecb2196f8e6c07cfa6d7c7acb65a50ad3126a95444fe33086a37aaa4d5` |
 | `testOneNoteFromOffice365-2.one` | 69,986 | `8cd245ed549043534118a00ce29715147c880c38ca88c3481acc19ae28e980c2` |
+| `packagedWithAttachments.one` | 4,538 | `8508106177dd0d56812045fdba19ef3ab6d47526fc5c219d294d49c9efe396db` |
 | `handwriting_recognition.one` | 180,020 | `2cff8769ccf0af6209d96d5e0650661077edba2d2bae4e4aa691f06caea35456` |

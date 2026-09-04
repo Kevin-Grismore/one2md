@@ -17,6 +17,8 @@ const HASHES: Record<string, string> = {
 	'testOneNoteEmbeddedWordDoc.one': 'cf38e39cb5ced46f377c832e5ff0fa5e789945930f77c294ba5e866429a2a028',
 	'testOneNoteFromOffice365.one': '093f20ecb2196f8e6c07cfa6d7c7acb65a50ad3126a95444fe33086a37aaa4d5',
 	'testOneNoteFromOffice365-2.one': '8cd245ed549043534118a00ce29715147c880c38ca88c3481acc19ae28e980c2',
+	// Generated here rather than copied; see SOURCE.md.
+	'packagedWithAttachments.one': '8508106177dd0d56812045fdba19ef3ab6d47526fc5c219d294d49c9efe396db',
 	'handwriting_recognition.one': '2cff8769ccf0af6209d96d5e0650661077edba2d2bae4e4aa691f06caea35456',
 };
 
