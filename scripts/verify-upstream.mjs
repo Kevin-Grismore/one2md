@@ -16,12 +16,13 @@
  * --sync rewrites the vendored files from the pinned commit instead of only
  * reporting on them, reapplying the two import rewrites afterwards.
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { convertFile } from '../src/convert-file.ts';
 import { MemorySink } from '../src/sinks.ts';
+import { readSection } from '../src/read-section.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sync = process.argv.includes('--sync');
@@ -119,6 +120,35 @@ for (const [fixture, expectedDir] of Object.entries(CASES)) {
 
 		console.log(`  ${same ? 'ok      ' : 'DIFFERS '} ${expectedDir}/${relative}`);
 		if (!same) problems++;
+	}
+}
+
+// The packaged reader hands `mapSection` a store whose `root` and `lists` are
+// empty, because nothing above the storage layer reads them. That is true of
+// the pinned commit and is not a promise upstream has made. Upstream has no
+// recording for these files, so the check above cannot cover them — this does,
+// loudly, at the moment a re-sync would otherwise break them silently.
+console.log('\nPackaged reader, after sync');
+
+for (const fixture of ['testOneNoteFromOffice365.one', 'packagedWithAttachments.one']) {
+	const file = path.join(root, 'tests/fixtures', fixture);
+	if (!existsSync(file)) {
+		console.log(`  MISSING  ${fixture}`);
+		problems++;
+		continue;
+	}
+
+	try {
+		const section = readSection(new Uint8Array(readFileSync(file)));
+		const pages = section.pages.length;
+
+		if (pages === 0) throw new Error('no pages');
+		console.log(`  ok       ${fixture} — ${pages} page(s)`);
+	}
+	catch (error) {
+		console.log(`  BROKEN   ${fixture}: ${error.message}`);
+		console.log('           A vendored change altered what mapSection needs from its store.');
+		problems++;
 	}
 }
 

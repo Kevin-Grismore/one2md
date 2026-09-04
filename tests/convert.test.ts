@@ -17,26 +17,7 @@ function read(path: string): Uint8Array {
 	return new Uint8Array(nodeFs.readFileSync(path));
 }
 
-/**
- * Sections packaged the way OneNote's sync protocol writes them, rather than
- * the desktop MS-ONESTORE encoding. The reader declines these deliberately, so
- * the contract worth pinning is the error, not a conversion.
- */
-const NOT_REVISION_STORE = /^testOneNoteFromOffice365/;
-
 for (const fixture of fixtures(['.one', '.onepkg'])) {
-	if (NOT_REVISION_STORE.test(fixture.name)) {
-		test(`${fixture.name} is declined as an encoding the reader does not implement`, async () => {
-			const sink = new MemorySink();
-			const report = await convertFile(read(fixture.path), fixture.name, sink);
-
-			assert.equal(sink.files.size, 0, 'nothing should be written for a file that cannot be read');
-			assert.deepEqual(report.errors.map(error => [error.kind, error.code]),
-				[['unsupported', 'ONENOTE_NOT_REVISION_STORE']]);
-		});
-		continue;
-	}
-
 	test(`converts ${fixture.name}`, async () => {
 		const sink = new MemorySink();
 		const report = await convertFile(read(fixture.path), fixture.name, sink);

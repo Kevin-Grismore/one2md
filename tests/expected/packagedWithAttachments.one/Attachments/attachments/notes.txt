@@ -1,0 +1,1 @@
+one2md attachment fixture: this file rides through the packaged file-data path.

@@ -20,7 +20,12 @@ export enum DataElementType {
 	RevisionManifest = 4,
 	ObjectGroup = 5,
 	DataElementFragment = 6,
-	ObjectDataBlob = 7,
+	/**
+	 * 0x0A, not 7 — the types are not contiguous. Guessing the next number
+	 * looked right for as long as no fixture embedded a file, because a section
+	 * with no attachments never emits one of these.
+	 */
+	ObjectDataBlob = 0x0a,
 }
 
 /** [MS-FSSHTTPB] 2.2.1.9 — a serial number: a GUID and a 64-bit ordinal, or null. */
