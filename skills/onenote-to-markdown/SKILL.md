@@ -1,14 +1,14 @@
 ---
 name: onenote-to-markdown
-description: Convert OneNote files to Markdown. Use whenever a `.one`, `.onepkg`, or `.onex` file is involved — converting a OneNote notebook or section to Markdown, extracting the text or images out of one, migrating OneNote notes into Obsidian or another vault, or reading what a `.one` file contains. Also use when someone refers to a OneNote export or backup by filename. Works entirely offline; no Microsoft account or Graph API.
+description: Convert OneNote files to Markdown. Use whenever a `.one`, `.onepkg`, or `.onex` file is involved — converting a OneNote notebook or section to Markdown, extracting the text or images out of one, migrating OneNote notes into Obsidian or another vault, or reading what a `.one` file contains. Also use when someone refers to a OneNote export or backup by filename. Reads both desktop and web-exported OneNote files. Works entirely offline; no Microsoft account or Graph API.
 ---
 
 # OneNote to Markdown
 
 `.one` and `.onepkg` are proprietary binary formats. **Do not try to read them
 yourself** — not with `cat`, `strings`, `grep`, `unzip`, a Python script, or by
-inspecting bytes. Run the bundled converter, which implements MS-ONESTORE and
-the MS-CAB/LZX container.
+inspecting bytes. Run the bundled converter, which implements MS-ONESTORE, the
+MS-FSSHTTPB packaging OneNote's web export uses, and the MS-CAB/LZX container.
 
 ## Convert
 
@@ -69,10 +69,6 @@ in an `attachments/` folder beside the note.
 Read `errors[].code` in the JSON and report it plainly. Do not retry, and do not
 fall back to reading the bytes yourself — these are real limits, not glitches.
 
-- **`ONENOTE_NOT_REVISION_STORE`** — the section was written by OneNote's sync
-  protocol rather than the desktop format. Common in files exported from OneNote
-  for the web. Tell the person to export the notebook again from the **OneNote
-  desktop app**, which produces a file this reads.
 - **`ONENOTE_ONEX_PROTECTED`** — the file is rights-protected and its contents
   are encrypted. Nothing can be recovered from it here.
 - **`ONENOTE_ONEX_UNSUPPORTED`** — a compound `.onex` this reader does not

@@ -2,6 +2,8 @@
 export enum StreamObject {
 	/** An object declared as living in a separate blob element, not inline. */
 	ObjectGroupObjectDeclareBlobReference = 0x05,
+	/** The payload of a standalone object-data BLOB element. */
+	ObjectDataBlob = 0x02,
 	StorageManifestRootDeclare = 0x07,
 	RevisionManifestRootDeclare = 0x0a,
 	CellManifestCurrentRevision = 0x0b,

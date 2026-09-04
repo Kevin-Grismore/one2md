@@ -64,18 +64,27 @@ Exit status is `0` when everything converted, `1` when any input or section
 failed, `2` on bad usage. `--json` reports every note and attachment written,
 everything skipped, and every failure with its `kind` and `code`.
 
+## Both encodings
+
+OneNote writes two different formats under the same `.one` extension, and this
+reads both:
+
+- **Desktop** — an MS-ONESTORE revision store, what the OneNote application
+  writes locally.
+- **Web** — an MS-FSSHTTPB package, what an export from OneNote on the web
+  gives you. Other importers commonly decline these.
+
+Which one applies is read from the file header, not guessed from the name. They
+share everything above the storage layer, so a page converts through identical
+code either way.
+
 ## What it will not convert
 
-A section written by OneNote's sync protocol rather than the desktop
-MS-ONESTORE encoding is declined with `ONENOTE_NOT_REVISION_STORE`. Files
-exported from OneNote for the web are often this shape. Exporting the notebook
-again from the OneNote desktop app produces a file this reads.
+A rights-protected `.onex` is declined: its contents are encrypted, and nothing
+here can open them. A damaged file is reported as malformed.
 
-A rights-protected `.onex` is declined too: its contents are encrypted, and
-nothing here can open them.
-
-Both are reported per section, so one unreadable section in a notebook does not
-cost you the rest.
+Failures are per section, so one unreadable section in a notebook does not cost
+you the rest.
 
 ## Using it from Claude
 
@@ -113,7 +122,7 @@ merge. See `NOTICE.md` for exactly what was changed and why.
 
 ```bash
 npm install
-npm test              # 40 tests, no network
+npm test              # 85 tests, no network
 npm run typecheck
 npm run build         # rebuild dist/one2md.mjs
 npm start -- --help   # run from source via tsx
@@ -125,6 +134,12 @@ Three things are being checked:
 archives produced by the Windows `makecab` utility and asserts the source bytes
 come back. Agreement is with Microsoft's compressor, not with a recording of our
 own output.
+
+**The packaged reader, against itself.** A packaged section's structures are
+read with exact-length assertions and cross-checked: the storage index must
+account for every manifest in the file, and each object declaration must agree
+with the data beside it on size and reference counts. The format leaves no
+padding, so these cannot pass by accident.
 
 **The whole pipeline, against recorded trees.** `tests/convert.test.ts` runs
 every fixture through the real conversion and compares file by file with

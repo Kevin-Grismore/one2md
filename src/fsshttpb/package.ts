@@ -100,6 +100,8 @@ export interface DataElementPackage {
 	cellManifests: Map<string, CellManifest>;
 	revisionManifests: Map<string, RevisionManifest>;
 	objectGroups: Map<string, ObjectGroup>;
+	/** Standalone payloads — the bytes of a file a page embeds. */
+	blobs: Map<string, Uint8Array>;
 }
 
 /**
@@ -283,6 +285,7 @@ export function readDataElementPackage(data: Uint8Array): DataElementPackage {
 	const cellManifests = new Map<string, CellManifest>();
 	const revisionManifests = new Map<string, RevisionManifest>();
 	const objectGroups = new Map<string, ObjectGroup>();
+	const blobs = new Map<string, Uint8Array>();
 
 	for (const element of packageNode.children) {
 		const header = readDataElementHeader(data, element);
@@ -304,9 +307,14 @@ export function readDataElementPackage(data: Uint8Array): DataElementPackage {
 			case DataElementType.ObjectGroup:
 				objectGroups.set(key, readObjectGroup(data, element));
 				break;
+			case DataElementType.ObjectDataBlob: {
+				const payload = expect(element.children.at(0), StreamObject.ObjectDataBlob, 'a BLOB payload');
+				blobs.set(key, data.subarray(payload.dataOffset, payload.dataOffset + payload.dataLength));
+				break;
+			}
 			default:
-				// Fragments and standalone blobs do not appear in a packaged
-				// section; ignoring one is safer than guessing at its meaning.
+				// A fragment reassembles an element split across responses, which
+				// a file on disk never is. Ignoring one is safer than guessing.
 				break;
 		}
 	}
@@ -320,5 +328,5 @@ export function readDataElementPackage(data: Uint8Array): DataElementPackage {
 			'The data element package has no storage manifest.');
 	}
 
-	return { storageIndex, storageManifest, cellManifests, revisionManifests, objectGroups };
+	return { storageIndex, storageManifest, cellManifests, revisionManifests, objectGroups, blobs };
 }

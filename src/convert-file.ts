@@ -11,10 +11,10 @@ import { createHash } from 'node:crypto';
 
 import { convertPage, SkipReason } from './onenote-file/convert';
 import { OneNoteFormatError } from './onenote-file/errors';
-import { listSections, readSections, SectionEntry } from './onenote-file/package';
 import { Page, Section } from './onenote-file/semantic/content';
 import { extensionFromBytes, extensionFromName } from './onenote-file/util';
 import { NameRegistry, sanitizeFileName } from './names';
+import { listSections, readSections, SectionEntry } from './read-section';
 
 export interface Sink {
 	write(path: string, data: Uint8Array): Promise<void>;

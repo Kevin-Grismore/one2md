@@ -408,6 +408,88 @@ function kindOf(code) {
   return unsupported.includes(code) ? "unsupported" : "malformed";
 }
 
+// src/names.ts
+var slashesRe = /[/\\]/g;
+var illegalRe = /[?<>:*|"]/g;
+var reservedRe = /^\.+$/;
+var windowsReservedRe = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i;
+var windowsTrailingRe = /[. ]+$/;
+var startsWithDotRe = /^[.\s]+/;
+var badLinkRe = /[[\]#|^]/g;
+function stripControlCharacters(name) {
+  let out = "";
+  for (const ch of name) {
+    const code = ch.charCodeAt(0);
+    if (code <= 31 || code >= 128 && code <= 159) continue;
+    out += ch;
+  }
+  return out;
+}
+var MAX_NAME_BYTES = 240;
+var WINDOWS_PATH_CHARS = 160;
+var NAME_TAIL_CHARS = 8;
+var MIN_NAME_CHARS = 24;
+var encoder = new TextEncoder();
+function charsAvailable(parentPath) {
+  if (process.platform !== "win32") return Infinity;
+  const used = parentPath ? parentPath.length + 1 : 0;
+  return Math.max(MIN_NAME_CHARS, WINDOWS_PATH_CHARS - used - NAME_TAIL_CHARS);
+}
+function limitNameLength(name, maxChars) {
+  if (name.length <= maxChars && (name.length * 3 <= MAX_NAME_BYTES || encoder.encode(name).length <= MAX_NAME_BYTES)) return name;
+  let truncated = "";
+  let bytes = 0;
+  for (const character of name) {
+    const size = encoder.encode(character).length;
+    if (bytes + size > MAX_NAME_BYTES) break;
+    if (truncated.length + character.length > maxChars) break;
+    truncated += character;
+    bytes += size;
+  }
+  const lastSpace = truncated.lastIndexOf(" ");
+  if (lastSpace > truncated.length / 2) truncated = truncated.slice(0, lastSpace);
+  return truncated;
+}
+function tidyName(name) {
+  return name.replace(reservedRe, "").replace(windowsTrailingRe, "").replace(windowsReservedRe, "").replace(badLinkRe, "").replace(startsWithDotRe, "");
+}
+function sanitizeFileName(name, parentPath) {
+  const cleaned = tidyName(stripControlCharacters(
+    (name ?? "").normalize("NFC").replace(slashesRe, "-").replace(illegalRe, "")
+  ));
+  const limited = limitNameLength(cleaned, charsAvailable(parentPath));
+  const sanitized = limited === cleaned ? cleaned : tidyName(limited);
+  return sanitized.trim() || "Untitled";
+}
+function availableFileName(fileName, isTaken) {
+  const lastDotIndex = fileName.lastIndexOf(".");
+  const hasExtension = lastDotIndex > 0;
+  const base = hasExtension ? fileName.slice(0, lastDotIndex) : fileName;
+  const extension = hasExtension ? fileName.slice(lastDotIndex) : "";
+  for (let index = 0; ; index++) {
+    const candidate = index === 0 ? fileName : `${base} ${index}${extension}`;
+    if (!isTaken(candidate)) return candidate;
+  }
+}
+var NameRegistry = class {
+  taken = /* @__PURE__ */ new Map();
+  setFor(folder) {
+    let set = this.taken.get(folder);
+    if (!set) this.taken.set(folder, set = /* @__PURE__ */ new Set());
+    return set;
+  }
+  /** Case-insensitive, because macOS and Windows filesystems are. */
+  claim(folder, fileName) {
+    const set = this.setFor(folder);
+    const chosen = availableFileName(fileName, (candidate) => set.has(candidate.toLowerCase()));
+    set.add(chosen.toLowerCase());
+    return chosen;
+  }
+  has(folder, fileName) {
+    return this.taken.get(folder)?.has(fileName.toLowerCase()) ?? false;
+  }
+};
+
 // src/onenote-file/cabinet/lzx.ts
 var LITERAL_SYMBOLS = 256;
 var PRIMARY_LENGTH_SYMBOLS = 8;
@@ -1405,6 +1487,23 @@ function reportOrThrow(header, options, code, message, offset) {
   header.diagnostics.push({ code, message, offset });
 }
 
+// src/onenote-file/onestore/options.ts
+var DEFAULT_READER_OPTIONS = {
+  maxFileNodeListFragments: 1e5,
+  maxFileNodes: 2e6,
+  maxTransactionLogFragments: 1e5,
+  maxTransactionEntries: 4e6,
+  maxObjects: 1e6,
+  maxPropertiesPerObject: 65536,
+  maxPropertySetDepth: 128,
+  maxPageGraphNodes: 1e5,
+  maxInkPathValues: 1e6,
+  maxAssetBytes: 64 * 1024 * 1024,
+  maxTotalAssetBytes: 256 * 1024 * 1024,
+  strictHeaderValidation: true,
+  validateTransactionChecksums: true
+};
+
 // src/onenote-file/onestore/file-node-list.ts
 var FRAGMENT_HEADER_LENGTH = 16;
 var FRAGMENT_TRAILER_LENGTH = 20;
@@ -2060,23 +2159,6 @@ function readObjectGraph(file, root, declaredFileLength, options) {
   reader.processList(root);
   return reader.result;
 }
-
-// src/onenote-file/onestore/options.ts
-var DEFAULT_READER_OPTIONS = {
-  maxFileNodeListFragments: 1e5,
-  maxFileNodes: 2e6,
-  maxTransactionLogFragments: 1e5,
-  maxTransactionEntries: 4e6,
-  maxObjects: 1e6,
-  maxPropertiesPerObject: 65536,
-  maxPropertySetDepth: 128,
-  maxPageGraphNodes: 1e5,
-  maxInkPathValues: 1e6,
-  maxAssetBytes: 64 * 1024 * 1024,
-  maxTotalAssetBytes: 256 * 1024 * 1024,
-  strictHeaderValidation: true,
-  validateTransactionChecksums: true
-};
 
 // src/onenote-file/onestore/transaction-log.ts
 var TRANSACTION_ENTRY_LENGTH = 8;
@@ -2925,7 +3007,7 @@ function collectRecognition(space, pageNode) {
   const rootId = readReferences(pageNode, Property.pageRecognizedTextContainer)[0];
   if (!rootId) return recognition;
   const visited = /* @__PURE__ */ new Set();
-  const walk = (id, depth) => {
+  const walk2 = (id, depth) => {
     if (depth > 8 || visited.has(keyOf(id))) return;
     visited.add(keyOf(id));
     const item = space.getObject(id);
@@ -2939,9 +3021,9 @@ function collectRecognition(space, pageNode) {
       }
       return;
     }
-    for (const childId of readReferences(item, Property.recognizedTextChildNodes)) walk(childId, depth + 1);
+    for (const childId of readReferences(item, Property.recognizedTextChildNodes)) walk2(childId, depth + 1);
   };
-  walk(rootId, 0);
+  walk2(rootId, 0);
   return recognition;
 }
 function buildImage({ space, materializer }, item) {
@@ -2997,7 +3079,854 @@ function collectText(element, into) {
   }
 }
 
-// src/onenote-file/package.ts
+// src/fsshttpb/binary.ts
+var NIL_GUID = "00000000-0000-0000-0000-000000000000";
+var NULL_EXTENDED_GUID = { identifier: NIL_GUID, value: 0 };
+function isNullExtendedGuid(id) {
+  return id.identifier === NIL_GUID && id.value === 0;
+}
+function extendedGuidKey(id) {
+  return `${id.identifier}:${id.value}`;
+}
+var Cursor2 = class _Cursor {
+  constructor(data, start = 0, limit = data.length) {
+    this.data = data;
+    this.limit = limit;
+    this.position = start;
+    if (limit > data.length) {
+      throw new OneNoteFormatError(
+        "ONENOTE_FSSHTTPB_RANGE",
+        "A structure claims to extend past the end of the file.",
+        start
+      );
+    }
+  }
+  position;
+  get remaining() {
+    return this.limit - this.position;
+  }
+  get atEnd() {
+    return this.position >= this.limit;
+  }
+  /** A cursor over `length` bytes starting here, without copying. */
+  sub(length) {
+    this.ensure(length);
+    return new _Cursor(this.data, this.position, this.position + length);
+  }
+  ensure(length) {
+    if (length < 0 || this.position + length > this.limit) {
+      throw new OneNoteFormatError(
+        "ONENOTE_FSSHTTPB_RANGE",
+        `Reading ${length} bytes would pass the end of the structure.`,
+        this.position
+      );
+    }
+  }
+  skip(length) {
+    this.ensure(length);
+    this.position += length;
+  }
+  readUInt8() {
+    this.ensure(1);
+    return this.data[this.position++];
+  }
+  readUInt16() {
+    this.ensure(2);
+    const value = this.data[this.position] | this.data[this.position + 1] << 8;
+    this.position += 2;
+    return value;
+  }
+  readUInt32() {
+    this.ensure(4);
+    const { data, position } = this;
+    const value = (data[position] | data[position + 1] << 8 | data[position + 2] << 16 | data[position + 3] << 24) >>> 0;
+    this.position += 4;
+    return value;
+  }
+  /** A view of the next `length` bytes. Shares memory with the file. */
+  readBytes(length) {
+    this.ensure(length);
+    const view = this.data.subarray(this.position, this.position + length);
+    this.position += length;
+    return view;
+  }
+  /** A GUID stored in the little-endian mixed-endian layout Windows uses. */
+  readGuid() {
+    this.ensure(16);
+    const hex = [];
+    for (let index = 0; index < 16; index++) hex.push(this.data[this.position + index].toString(16).padStart(2, "0"));
+    this.position += 16;
+    const at = (...order) => order.map((index) => hex[index]).join("");
+    return `${at(3, 2, 1, 0)}-${at(5, 4)}-${at(7, 6)}-${at(8, 9)}-${at(10, 11, 12, 13, 14, 15)}`;
+  }
+  /**
+   * [MS-FSSHTTPB] 2.2.1.1 — a compact unsigned 64-bit integer.
+   *
+   * The low bits of the first byte say how wide the encoding is: the position
+   * of its lowest set bit gives the width, and the value occupies everything
+   * above that marker. A first byte of zero is the value zero, and 0x80
+   * introduces a full 64-bit value in the eight bytes that follow.
+   *
+   * Returned as a JS number. Values above 2^53 cannot occur in a file this
+   * reader will accept — every use is a length, a count or an ordinal bounded
+   * by the file size — and one is rejected rather than silently rounded.
+   */
+  readCompactUint() {
+    const first = this.data[this.position];
+    if (this.position >= this.limit) {
+      throw new OneNoteFormatError(
+        "ONENOTE_FSSHTTPB_RANGE",
+        "A compact integer begins past the end of the structure.",
+        this.position
+      );
+    }
+    if (first === 0) {
+      this.position++;
+      return 0;
+    }
+    if (first === 128) {
+      this.ensure(9);
+      this.position++;
+      const low = this.readUInt32();
+      const high = this.readUInt32();
+      const value = high * 4294967296 + low;
+      if (!Number.isSafeInteger(value)) {
+        throw new OneNoteFormatError(
+          "ONENOTE_FSSHTTPB_HUGE_INTEGER",
+          "A compact integer exceeds the range this reader supports.",
+          this.position - 9
+        );
+      }
+      return value;
+    }
+    let width = 0;
+    while (width < 7 && (first & 1 << width) === 0) width++;
+    const bytes = width + 1;
+    this.ensure(bytes);
+    let raw = 0;
+    for (let index = bytes - 1; index >= 0; index--) raw = raw * 256 + this.data[this.position + index];
+    this.position += bytes;
+    return Math.floor(raw / Math.pow(2, width + 1));
+  }
+  /**
+   * [MS-FSSHTTPB] 2.2.1.7 — an Extended GUID: a GUID with an ordinal.
+   *
+   * Four widths carry non-overlapping ordinal ranges, plus a null form. The
+   * type occupies the low bits of the first byte and the ordinal the rest, so
+   * the GUID always follows on a byte boundary.
+   */
+  readExtendedGuid() {
+    const start = this.position;
+    const first = this.readUInt8();
+    if (first === 0) return { ...NULL_EXTENDED_GUID };
+    if ((first & 7) === 4) {
+      const value = first >>> 3;
+      return { identifier: this.readGuid(), value };
+    }
+    if ((first & 63) === 32) {
+      const value = first >>> 6 | this.readUInt8() << 2;
+      return { identifier: this.readGuid(), value };
+    }
+    if ((first & 127) === 64) {
+      const value = first >>> 7 | this.readUInt16() << 1;
+      return { identifier: this.readGuid(), value };
+    }
+    if (first === 128) {
+      const value = this.readUInt32();
+      return { identifier: this.readGuid(), value };
+    }
+    throw new OneNoteFormatError(
+      "ONENOTE_FSSHTTPB_EXTENDED_GUID",
+      `Byte 0x${first.toString(16)} does not begin any Extended GUID encoding.`,
+      start
+    );
+  }
+  /** [MS-FSSHTTPB] 2.2.1.10 — a cell identifier: a pair of Extended GUIDs. */
+  readCellId() {
+    return { first: this.readExtendedGuid(), second: this.readExtendedGuid() };
+  }
+  /** [MS-FSSHTTPB] 2.2.1.8 — a counted array of Extended GUIDs. */
+  readExtendedGuidArray() {
+    const count = this.readCompactUint();
+    const items = [];
+    for (let index = 0; index < count; index++) items.push(this.readExtendedGuid());
+    return items;
+  }
+  /** [MS-FSSHTTPB] 2.2.1.11 — a counted array of cell identifiers. */
+  readCellIdArray() {
+    const count = this.readCompactUint();
+    const items = [];
+    for (let index = 0; index < count; index++) items.push(this.readCellId());
+    return items;
+  }
+  /**
+   * [MS-FSSHTTPB] 2.2.1.3 — a binary item: a compact length, then that many
+   * bytes.
+   *
+   * The length is carried explicitly, so an item is not simply the rest of the
+   * structure it sits in — reading it that way happens to work only when the
+   * item is last, and silently absorbs whatever follows when it is not.
+   */
+  readBinaryItem() {
+    return this.readBytes(this.readCompactUint());
+  }
+  /**
+   * [MS-FSSHTTPB] 2.2.1.5 — a stream object header, in any of its four forms.
+   *
+   * The low two bits pick the form: 0 and 2 begin an object in 16 and 32 bits,
+   * 1 and 3 end one in 8 and 16. A 32-bit start whose length field is all ones
+   * carries its real length in a compact integer that follows.
+   */
+  readStreamObjectHeader() {
+    const offset = this.position;
+    const first = this.data[this.position];
+    if (this.atEnd) {
+      throw new OneNoteFormatError(
+        "ONENOTE_FSSHTTPB_RANGE",
+        "A stream object header begins past the end of the structure.",
+        offset
+      );
+    }
+    switch (first & 3) {
+      case 0: {
+        const header = this.readUInt16();
+        return {
+          kind: "start",
+          compound: (header & 4) !== 0,
+          type: header >>> 3 & 63,
+          length: header >>> 9 & 127,
+          offset,
+          headerLength: 2
+        };
+      }
+      case 2: {
+        const header = this.readUInt32();
+        const declared = header >>> 17 & 32767;
+        const length = declared === 32767 ? this.readCompactUint() : declared;
+        return {
+          kind: "start",
+          compound: (header & 4) !== 0,
+          type: header >>> 3 & 16383,
+          length,
+          offset,
+          headerLength: this.position - offset
+        };
+      }
+      case 1: {
+        const header = this.readUInt8();
+        return { kind: "end", compound: false, type: header >>> 2, length: 0, offset, headerLength: 1 };
+      }
+      default: {
+        const header = this.readUInt16();
+        return { kind: "end", compound: false, type: header >>> 2, length: 0, offset, headerLength: 2 };
+      }
+    }
+  }
+};
+
+// src/fsshttpb/data-element.ts
+var DataElementType = /* @__PURE__ */ ((DataElementType2) => {
+  DataElementType2[DataElementType2["StorageIndex"] = 1] = "StorageIndex";
+  DataElementType2[DataElementType2["StorageManifest"] = 2] = "StorageManifest";
+  DataElementType2[DataElementType2["CellManifest"] = 3] = "CellManifest";
+  DataElementType2[DataElementType2["RevisionManifest"] = 4] = "RevisionManifest";
+  DataElementType2[DataElementType2["ObjectGroup"] = 5] = "ObjectGroup";
+  DataElementType2[DataElementType2["DataElementFragment"] = 6] = "DataElementFragment";
+  DataElementType2[DataElementType2["ObjectDataBlob"] = 7] = "ObjectDataBlob";
+  return DataElementType2;
+})(DataElementType || {});
+var NULL_SERIAL = { identifier: NIL_GUID, value: 0 };
+var DATA_ELEMENT_TYPE = 1;
+function readSerialNumber(cursor) {
+  const marker = cursor.readUInt8();
+  if (marker === 0) return { ...NULL_SERIAL };
+  if (marker !== 128) {
+    throw new OneNoteFormatError(
+      "ONENOTE_FSSHTTPB_SERIAL_NUMBER",
+      `Byte 0x${marker.toString(16)} does not begin a serial number.`,
+      cursor.position - 1
+    );
+  }
+  const identifier = cursor.readGuid();
+  const low = cursor.readUInt32();
+  const high = cursor.readUInt32();
+  const value = high * 4294967296 + low;
+  if (!Number.isSafeInteger(value)) {
+    throw new OneNoteFormatError(
+      "ONENOTE_FSSHTTPB_HUGE_INTEGER",
+      "A serial number exceeds the range this reader supports.",
+      cursor.position - 8
+    );
+  }
+  return { identifier, value };
+}
+function readDataElementHeader(data, node) {
+  if (node.type !== DATA_ELEMENT_TYPE) {
+    throw new OneNoteFormatError(
+      "ONENOTE_FSSHTTPB_NOT_DATA_ELEMENT",
+      `Stream object type 0x${node.type.toString(16)} is not a data element.`,
+      node.offset
+    );
+  }
+  const cursor = new Cursor2(data, node.dataOffset, node.dataOffset + node.dataLength);
+  const id = cursor.readExtendedGuid();
+  const serial = readSerialNumber(cursor);
+  const type = cursor.readCompactUint();
+  const length = cursor.position - node.dataOffset;
+  if (!cursor.atEnd) {
+    throw new OneNoteFormatError(
+      "ONENOTE_FSSHTTPB_DATA_ELEMENT_LENGTH",
+      `A data element declares ${node.dataLength} bytes but its header uses ${length}.`,
+      node.dataOffset
+    );
+  }
+  if (!(type in DataElementType)) {
+    throw new OneNoteFormatError(
+      "ONENOTE_FSSHTTPB_DATA_ELEMENT_TYPE",
+      `Data element type ${type} is not one this reader knows.`,
+      node.dataOffset
+    );
+  }
+  return { id, serial, type, length };
+}
+
+// src/fsshttpb/walk.ts
+var MAX_DEPTH = 64;
+var PACKAGING_START = 68;
+function walk(data, from = PACKAGING_START) {
+  const cursor = new Cursor2(data, from);
+  const histogram = /* @__PURE__ */ new Map();
+  const roots = [];
+  let maxDepth = 0;
+  const count = (type) => histogram.set(type, (histogram.get(type) ?? 0) + 1);
+  const readOne = (into, depth) => {
+    const mark = cursor.position;
+    const header = cursor.readStreamObjectHeader();
+    if (header.kind !== "start") {
+      throw new OneNoteFormatError(
+        "ONENOTE_FSSHTTPB_UNBALANCED",
+        "The packaging structure does not begin with a start header.",
+        mark
+      );
+    }
+    count(header.type);
+    const node = {
+      type: header.type,
+      compound: header.compound,
+      offset: mark,
+      dataOffset: mark + header.headerLength,
+      dataLength: header.length,
+      children: []
+    };
+    into.push(node);
+    cursor.skip(header.length);
+    if (header.compound) readChildren(node.children, depth + 1, header.type);
+  };
+  const readChildren = (into, depth, closing) => {
+    if (depth > MAX_DEPTH) {
+      throw new OneNoteFormatError(
+        "ONENOTE_FSSHTTPB_DEPTH",
+        "Stream objects nest deeper than this reader will follow.",
+        cursor.position
+      );
+    }
+    maxDepth = Math.max(maxDepth, depth);
+    while (!cursor.atEnd) {
+      const mark = cursor.position;
+      const header = cursor.readStreamObjectHeader();
+      if (header.kind === "end") {
+        if (header.type !== closing) {
+          throw new OneNoteFormatError(
+            "ONENOTE_FSSHTTPB_UNBALANCED",
+            `Object type 0x${closing.toString(16)} is closed by an end header for 0x${header.type.toString(16)}.`,
+            mark
+          );
+        }
+        return;
+      }
+      count(header.type);
+      const node = {
+        type: header.type,
+        compound: header.compound,
+        offset: mark,
+        dataOffset: mark + header.headerLength,
+        dataLength: header.length,
+        children: []
+      };
+      into.push(node);
+      cursor.skip(header.length);
+      if (header.compound) readChildren(node.children, depth + 1, header.type);
+    }
+    throw new OneNoteFormatError(
+      "ONENOTE_FSSHTTPB_UNBALANCED",
+      `Object type 0x${closing.toString(16)} is never closed.`,
+      cursor.position
+    );
+  };
+  readOne(roots, 0);
+  const end = cursor.position;
+  for (let index = end; index < data.length; index++) {
+    if (data[index] !== 0) {
+      throw new OneNoteFormatError(
+        "ONENOTE_FSSHTTPB_TRAILING",
+        "The bytes after the packaging object are not padding.",
+        index
+      );
+    }
+  }
+  return { roots, start: from, end, trailing: data.length - end, histogram, maxDepth };
+}
+
+// src/fsshttpb/package.ts
+function readExact(data, node, read) {
+  const cursor = new Cursor2(data, node.dataOffset, node.dataOffset + node.dataLength);
+  const value = read(cursor);
+  if (!cursor.atEnd) {
+    throw new OneNoteFormatError(
+      "ONENOTE_FSSHTTPB_STRUCTURE_LENGTH",
+      `Stream object 0x${node.type.toString(16)} declares ${node.dataLength} bytes but its fields used ${cursor.position - node.dataOffset}.`,
+      node.dataOffset
+    );
+  }
+  return value;
+}
+function expect(node, type, what) {
+  if (!node || node.type !== type) {
+    throw new OneNoteFormatError(
+      "ONENOTE_FSSHTTPB_MISSING_STRUCTURE",
+      `Expected ${what} (0x${type.toString(16)}) but found ` + (node ? `0x${node.type.toString(16)}` : "nothing") + ".",
+      node?.offset
+    );
+  }
+  return node;
+}
+function readSerial(cursor) {
+  const marker = cursor.readUInt8();
+  if (marker === 0) return { identifier: "00000000-0000-0000-0000-000000000000", value: 0 };
+  if (marker !== 128) {
+    throw new OneNoteFormatError(
+      "ONENOTE_FSSHTTPB_SERIAL_NUMBER",
+      `Byte 0x${marker.toString(16)} does not begin a serial number.`,
+      cursor.position - 1
+    );
+  }
+  const identifier = cursor.readGuid();
+  const low = cursor.readUInt32();
+  const high = cursor.readUInt32();
+  return { identifier, value: high * 4294967296 + low };
+}
+function readStorageIndex(data, element) {
+  const index = { manifestMappings: [], cellMappings: [], revisionMappings: [] };
+  for (const child of element.children) {
+    switch (child.type) {
+      case 17 /* StorageIndexManifestMapping */:
+        index.manifestMappings.push(readExact(data, child, (cursor) => ({
+          id: cursor.readExtendedGuid(),
+          serial: readSerial(cursor)
+        })));
+        break;
+      case 14 /* StorageIndexCellMapping */:
+        index.cellMappings.push(readExact(data, child, (cursor) => ({
+          cell: cursor.readCellId(),
+          id: cursor.readExtendedGuid(),
+          serial: readSerial(cursor)
+        })));
+        break;
+      case 13 /* StorageIndexRevisionMapping */:
+        index.revisionMappings.push(readExact(data, child, (cursor) => ({
+          revision: cursor.readExtendedGuid(),
+          id: cursor.readExtendedGuid(),
+          serial: readSerial(cursor)
+        })));
+        break;
+      default:
+        throw new OneNoteFormatError(
+          "ONENOTE_FSSHTTPB_MISSING_STRUCTURE",
+          `A storage index cannot hold a 0x${child.type.toString(16)}.`,
+          child.offset
+        );
+    }
+  }
+  return index;
+}
+function readStorageManifest(data, element) {
+  const schemaNode = expect(element.children.at(0), 12 /* StorageManifestSchemaGuid */, "a schema GUID");
+  const schema = readExact(data, schemaNode, (cursor) => cursor.readGuid());
+  const roots = element.children.slice(1).map((child) => readExact(
+    data,
+    expect(child, 7 /* StorageManifestRootDeclare */, "a root declaration"),
+    (cursor) => ({ root: cursor.readExtendedGuid(), cell: cursor.readCellId() })
+  ));
+  return { schema, roots };
+}
+function readCellManifest(data, element) {
+  const node = expect(element.children.at(0), 11 /* CellManifestCurrentRevision */, "a current revision");
+  return { currentRevision: readExact(data, node, (cursor) => cursor.readExtendedGuid()) };
+}
+function readRevisionManifest(data, element) {
+  const head = expect(element.children.at(0), 26 /* RevisionManifest */, "a revision manifest");
+  const { revision, baseRevision } = readExact(data, head, (cursor) => ({
+    revision: cursor.readExtendedGuid(),
+    baseRevision: cursor.readExtendedGuid()
+  }));
+  const manifest = { revision, baseRevision, roots: [], objectGroups: [] };
+  for (const child of element.children.slice(1)) {
+    switch (child.type) {
+      case 10 /* RevisionManifestRootDeclare */:
+        manifest.roots.push(readExact(data, child, (cursor) => ({
+          root: cursor.readExtendedGuid(),
+          object: cursor.readExtendedGuid()
+        })));
+        break;
+      case 25 /* RevisionManifestObjectGroupReference */:
+        manifest.objectGroups.push(readExact(data, child, (cursor) => cursor.readExtendedGuid()));
+        break;
+      default:
+        throw new OneNoteFormatError(
+          "ONENOTE_FSSHTTPB_MISSING_STRUCTURE",
+          `A revision manifest cannot hold a 0x${child.type.toString(16)}.`,
+          child.offset
+        );
+    }
+  }
+  return manifest;
+}
+function readObjectGroup(data, element) {
+  const group = { declarations: [], data: [] };
+  for (const section of element.children) {
+    if (section.type === 29 /* ObjectGroupDeclarations */) {
+      for (const child of section.children) {
+        const isBlobReference = child.type === 5 /* ObjectGroupObjectDeclareBlobReference */;
+        if (!isBlobReference) expect(child, 24 /* ObjectGroupObjectDeclare */, "an object declaration");
+        group.declarations.push(readExact(data, child, (cursor) => ({
+          object: cursor.readExtendedGuid(),
+          // A blob reference names its payload element instead of
+          // carrying a size, so the two forms differ by one field each.
+          blob: isBlobReference ? cursor.readExtendedGuid() : void 0,
+          partition: cursor.readCompactUint(),
+          dataSize: isBlobReference ? void 0 : cursor.readCompactUint(),
+          objectReferenceCount: cursor.readCompactUint(),
+          cellReferenceCount: cursor.readCompactUint()
+        })));
+      }
+      continue;
+    }
+    if (section.type === 30 /* ObjectGroupData */) {
+      for (const child of section.children) {
+        const isBlobReference = child.type === 28 /* ObjectGroupObjectDataBlobReference */;
+        if (!isBlobReference) expect(child, 22 /* ObjectGroupObjectData */, "object data");
+        group.data.push(readExact(data, child, (cursor) => ({
+          // The object's identity is not repeated here; it comes from
+          // the declaration at the same position.
+          objectReferences: cursor.readExtendedGuidArray(),
+          cellReferences: cursor.readCellIdArray(),
+          data: isBlobReference ? void 0 : cursor.readBinaryItem(),
+          blob: isBlobReference ? cursor.readExtendedGuid() : void 0
+        })));
+      }
+      continue;
+    }
+    throw new OneNoteFormatError(
+      "ONENOTE_FSSHTTPB_MISSING_STRUCTURE",
+      `An object group cannot hold a 0x${section.type.toString(16)}.`,
+      section.offset
+    );
+  }
+  return group;
+}
+function readDataElementPackage(data) {
+  const root = walk(data).roots[0];
+  const packageNode = expect(root.children.at(0), 21 /* DataElementPackage */, "a data element package");
+  let storageIndex;
+  let storageManifest;
+  const cellManifests = /* @__PURE__ */ new Map();
+  const revisionManifests = /* @__PURE__ */ new Map();
+  const objectGroups = /* @__PURE__ */ new Map();
+  const blobs = /* @__PURE__ */ new Map();
+  for (const element of packageNode.children) {
+    const header = readDataElementHeader(data, element);
+    const key = extendedGuidKey(header.id);
+    switch (header.type) {
+      case 1 /* StorageIndex */:
+        storageIndex = readStorageIndex(data, element);
+        break;
+      case 2 /* StorageManifest */:
+        storageManifest = readStorageManifest(data, element);
+        break;
+      case 3 /* CellManifest */:
+        cellManifests.set(key, readCellManifest(data, element));
+        break;
+      case 4 /* RevisionManifest */:
+        revisionManifests.set(key, readRevisionManifest(data, element));
+        break;
+      case 5 /* ObjectGroup */:
+        objectGroups.set(key, readObjectGroup(data, element));
+        break;
+      case 7 /* ObjectDataBlob */: {
+        const payload = expect(element.children.at(0), 2 /* ObjectDataBlob */, "a BLOB payload");
+        blobs.set(key, data.subarray(payload.dataOffset, payload.dataOffset + payload.dataLength));
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  if (!storageIndex) {
+    throw new OneNoteFormatError(
+      "ONENOTE_FSSHTTPB_NO_STORAGE_INDEX",
+      "The data element package has no storage index."
+    );
+  }
+  if (!storageManifest) {
+    throw new OneNoteFormatError(
+      "ONENOTE_FSSHTTPB_NO_STORAGE_MANIFEST",
+      "The data element package has no storage manifest."
+    );
+  }
+  return { storageIndex, storageManifest, cellManifests, revisionManifests, objectGroups, blobs };
+}
+
+// src/fsshttpb/object-graph.ts
+var DEFAULT_CONTEXT_GUID = "84defab9-aaa3-4a0d-a3a8-520c77ac7073";
+function isDefaultContext(id) {
+  return isNullExtendedGuid(id) || id.identifier === DEFAULT_CONTEXT_GUID && id.value === 1;
+}
+function toStoreGuid(id) {
+  return { identifier: id.identifier, value: id.value };
+}
+function readReferenceStream(data, position) {
+  if (position + 4 > data.length) {
+    throw new OneNoteFormatError(
+      "ONENOTE_FSSHTTPB_OBJECT_STREAM",
+      "A property reference stream is truncated.",
+      position
+    );
+  }
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const header = view.getUint32(position, true);
+  const count = header & 16777215;
+  if ((header & 1056964608) !== 0 || position + 4 + count * 4 > data.length) {
+    throw new OneNoteFormatError(
+      "ONENOTE_FSSHTTPB_OBJECT_STREAM",
+      "A property reference stream is invalid or longer than the object data.",
+      position
+    );
+  }
+  const compactIds = [];
+  for (let index = 0; index < count; index++) compactIds.push(view.getUint32(position + 4 + index * 4, true));
+  return {
+    stream: {
+      compactIds,
+      extendedStreamsPresent: (header & 1073741824) !== 0,
+      osidStreamNotPresent: (header & 2147483648) !== 0
+    },
+    next: position + 4 + count * 4
+  };
+}
+function addMappings(into, compactIds, extendedIds, offset, kind) {
+  if (compactIds.length !== extendedIds.length) {
+    throw new OneNoteFormatError(
+      "ONENOTE_FSSHTTPB_MAPPING_COUNT",
+      `The ${kind} CompactID and Extended GUID arrays have different lengths.`,
+      offset
+    );
+  }
+  for (let index = 0; index < compactIds.length; index++) {
+    const compact = compactIds[index];
+    const extended = extendedIds[index];
+    if (compact === 0 && isNullExtendedGuid(extended)) continue;
+    const globalIndex = compact >>> 8;
+    const ordinal = compact & 255;
+    if (globalIndex >= 16777215 || extended.identifier === NIL_GUID || extended.value !== ordinal) {
+      throw new OneNoteFormatError(
+        "ONENOTE_FSSHTTPB_MAPPING",
+        `A ${kind} mapping pairs a CompactID with an incompatible Extended GUID.`,
+        offset
+      );
+    }
+    const existing = into.get(globalIndex);
+    if (existing !== void 0 && existing !== extended.identifier) {
+      throw new OneNoteFormatError(
+        "ONENOTE_FSSHTTPB_MAPPING",
+        "One CompactID global index maps to two different GUIDs.",
+        offset
+      );
+    }
+    into.set(globalIndex, extended.identifier);
+  }
+}
+function buildGlobalIds(item, cell) {
+  const data = item.propertyData;
+  const mappings = /* @__PURE__ */ new Map();
+  const { stream: oids, next } = readReferenceStream(data, 0);
+  let osids;
+  let contexts;
+  if (!oids.osidStreamNotPresent) {
+    const read = readReferenceStream(data, next);
+    osids = read.stream;
+    if (osids.extendedStreamsPresent) contexts = readReferenceStream(data, read.next).stream;
+  }
+  const osidReferences = item.cellReferences.filter((reference) => extendedGuidKey(reference.first) === extendedGuidKey(cell.first)).map((reference) => reference.second);
+  const contextReferences = item.cellReferences.filter((reference) => extendedGuidKey(reference.first) !== extendedGuidKey(cell.first)).map((reference) => reference.first);
+  addMappings(mappings, oids.compactIds, item.objectReferences, item.offset, "object");
+  if (osids) addMappings(mappings, osids.compactIds, osidReferences, item.offset, "object-space");
+  if (contexts) addMappings(mappings, contexts.compactIds, contextReferences, item.offset, "context");
+  return mappings;
+}
+function accumulate(group, into, order) {
+  for (let index = 0; index < group.declarations.length; index++) {
+    const declaration = group.declarations[index];
+    const data = group.data[index];
+    if (!data) continue;
+    const key = extendedGuidKey(declaration.object);
+    let item = into.get(key);
+    if (!item) {
+      item = {
+        id: declaration.object,
+        jcid: 0,
+        objectReferences: [],
+        cellReferences: [],
+        referenceCount: 0,
+        offset: 0
+      };
+      into.set(key, item);
+      order.push(item);
+    }
+    item.referenceCount = Math.max(
+      item.referenceCount,
+      declaration.objectReferenceCount + declaration.cellReferenceCount
+    );
+    switch (declaration.partition) {
+      case 4 /* ObjectMetadata */: {
+        if (data.data?.length !== 4) {
+          throw new OneNoteFormatError(
+            "ONENOTE_FSSHTTPB_JCID",
+            "Object metadata is not a four-byte type code."
+          );
+        }
+        const bytes = data.data;
+        item.jcid = (bytes[0] | bytes[1] << 8 | bytes[2] << 16 | bytes[3] << 24) >>> 0;
+        break;
+      }
+      case 1 /* ObjectData */:
+        item.propertyData = data.data;
+        item.objectReferences = data.objectReferences;
+        item.cellReferences = data.cellReferences;
+        break;
+      case 2 /* ObjectFileData */:
+        item.blob = data.blob ?? declaration.blob;
+        break;
+      default:
+        break;
+    }
+  }
+}
+function buildObjectGraph(data, options = DEFAULT_READER_OPTIONS, parsed = readDataElementPackage(data)) {
+  const working = /* @__PURE__ */ new Map();
+  const byRevisionId = /* @__PURE__ */ new Map();
+  for (const [elementKey, manifest] of parsed.revisionManifests) {
+    const revision = {
+      manifest: {
+        id: toStoreGuid(manifest.revision),
+        dependencyId: isNullExtendedGuid(manifest.baseRevision) ? void 0 : toStoreGuid(manifest.baseRevision),
+        role: 0,
+        isEncrypted: false,
+        rootObjects: manifest.roots.map((root) => ({
+          objectId: toStoreGuid(root.object),
+          role: root.root.value
+        })),
+        roleAssociations: []
+      },
+      objectGroups: manifest.objectGroups
+    };
+    working.set(elementKey, revision);
+    byRevisionId.set(extendedGuidKey(manifest.revision), revision);
+  }
+  const revisionElementByRevisionId = new Map(
+    parsed.storageIndex.revisionMappings.map((mapping) => [extendedGuidKey(mapping.revision), mapping.id])
+  );
+  let order = 0;
+  for (const mapping of parsed.storageIndex.cellMappings) {
+    const cellManifest = parsed.cellManifests.get(extendedGuidKey(mapping.id));
+    if (!cellManifest) continue;
+    const elementId = revisionElementByRevisionId.get(extendedGuidKey(cellManifest.currentRevision));
+    if (!elementId) continue;
+    const current = working.get(extendedGuidKey(elementId));
+    if (!current) continue;
+    assignCell(current, mapping.cell, byRevisionId, order++);
+  }
+  const graph = { revisions: [], objects: [], fileDataObjects: [] };
+  const placed = /* @__PURE__ */ new Set();
+  for (const revision of working.values()) {
+    if (!revision.manifest.objectSpaceId) continue;
+    graph.revisions.push(revision.manifest);
+  }
+  for (const revision of working.values()) {
+    if (!revision.manifest.objectSpaceId || !revision.cell) continue;
+    const objects = /* @__PURE__ */ new Map();
+    const ordered = [];
+    for (const groupId of revision.objectGroups) {
+      const group = parsed.objectGroups.get(extendedGuidKey(groupId));
+      if (group) accumulate(group, objects, ordered);
+    }
+    for (const item of ordered) {
+      if (graph.objects.length >= options.maxObjects) {
+        throw new OneNoteFormatError("ONENOTE_OBJECT_LIMIT", "The object declaration limit was exceeded.");
+      }
+      const record = {
+        id: toStoreGuid(item.id),
+        jcid: item.jcid,
+        referenceCount: item.referenceCount,
+        revisionId: revision.manifest.id,
+        // An object seen in an earlier revision is that revision's,
+        // carried forward rather than declared afresh.
+        isRevision: placed.has(keyOf(toStoreGuid(item.id)))
+      };
+      placed.add(keyOf(toStoreGuid(item.id)));
+      if (item.propertyData) {
+        const globalIds = buildGlobalIds(item, revision.cell);
+        record.propertySet = readPropertySet(item.propertyData, globalIds, options, 0);
+        record.fileDataReference = readString(record, Property.fileDataReference);
+        record.fileExtension = readString(record, Property.fileDataExtension);
+      }
+      graph.objects.push(record);
+      const payload = item.blob && parsed.blobs.get(extendedGuidKey(item.blob));
+      const referenceId = fileDataId(record.fileDataReference);
+      if (payload && referenceId && !graph.fileDataObjects.some((entry) => entry.referenceId === referenceId)) {
+        graph.fileDataObjects.push({ referenceId, payload });
+      }
+    }
+  }
+  return graph;
+}
+function fileDataId(reference) {
+  if (!reference || !reference.toLowerCase().startsWith("<ifndf>")) return void 0;
+  return reference.slice(7).trim().replace(/\0+$/, "").replace(/^\{|\}$/g, "").toLowerCase();
+}
+function assignCell(head, cell, byRevisionId, order) {
+  const visited = /* @__PURE__ */ new Set();
+  let revision = head;
+  let isCurrent = true;
+  while (revision && !visited.has(keyOf(revision.manifest.id))) {
+    visited.add(keyOf(revision.manifest.id));
+    revision.cell = cell;
+    revision.manifest.objectSpaceId = toStoreGuid(cell.second);
+    revision.manifest.contextId = isDefaultContext(cell.first) ? void 0 : toStoreGuid(cell.first);
+    if (isCurrent) {
+      revision.manifest.role = 1;
+      revision.manifest.roleAssociations.push({
+        contextId: revision.manifest.contextId,
+        role: 1,
+        order
+      });
+      isCurrent = false;
+    }
+    const dependency = revision.manifest.dependencyId;
+    revision = dependency ? byRevisionId.get(keyOf(dependency)) : void 0;
+  }
+}
+
+// src/read-section.ts
 var SECTION_EXTENSION = /\.one$/i;
 function titleOf(name) {
   return name.replace(/^.*[\\/]/, "").replace(SECTION_EXTENSION, "");
@@ -3013,11 +3942,19 @@ function isSection(name) {
 function isPackage(data) {
   return data.length >= 4 && data[0] === 77 && data[1] === 83 && data[2] === 67 && data[3] === 70;
 }
-function listSections(data, fallbackName, limits = DEFAULT_CABINET_LIMITS) {
-  if (!isPackage(data)) return [{ name: fallbackName, title: titleOf(fallbackName), groups: [] }];
-  return readCabinetIndex(data, limits).entries.filter((entry) => isSection(entry.name)).map((entry) => ({ name: entry.name, title: titleOf(entry.name), groups: groupsOf(entry.name) }));
+function readSection(data, options = DEFAULT_READER_OPTIONS) {
+  const header = readFileHeader(data, data.length, options);
+  if (header.storageFormat === "file-synchronization-package") {
+    return mapSection({
+      header,
+      root: { id: 0, nodes: [] },
+      lists: [],
+      graph: buildObjectGraph(data, options)
+    }, options);
+  }
+  return mapSection(readRevisionStore(data, options), options);
 }
-function readSections(data, fallbackName, wanted, limits = DEFAULT_CABINET_LIMITS) {
+function readSections(data, fallbackName, wanted, limits = DEFAULT_CABINET_LIMITS, options = DEFAULT_READER_OPTIONS) {
   if (isCompoundFile(data)) {
     const kind = inspectOnex(data);
     throw new OneNoteFormatError(
@@ -3026,97 +3963,24 @@ function readSections(data, fallbackName, wanted, limits = DEFAULT_CABINET_LIMIT
     );
   }
   if (!isPackage(data)) {
-    return [{ name: fallbackName, title: titleOf(fallbackName), groups: [], read: () => mapSection(readRevisionStore(data)) }];
+    return [{
+      name: fallbackName,
+      title: titleOf(fallbackName),
+      groups: [],
+      read: () => readSection(data, options)
+    }];
   }
   return readCabinet(data, limits, (name) => isSection(name) && (!wanted || wanted.has(name))).map((entry) => ({
     name: entry.name,
     title: titleOf(entry.name),
     groups: groupsOf(entry.name),
-    read: () => mapSection(readRevisionStore(entry.data))
+    read: () => readSection(entry.data, options)
   }));
 }
-
-// src/names.ts
-var slashesRe = /[/\\]/g;
-var illegalRe = /[?<>:*|"]/g;
-var reservedRe = /^\.+$/;
-var windowsReservedRe = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i;
-var windowsTrailingRe = /[. ]+$/;
-var startsWithDotRe = /^[.\s]+/;
-var badLinkRe = /[[\]#|^]/g;
-function stripControlCharacters(name) {
-  let out = "";
-  for (const ch of name) {
-    const code = ch.charCodeAt(0);
-    if (code <= 31 || code >= 128 && code <= 159) continue;
-    out += ch;
-  }
-  return out;
+function listSections(data, fallbackName, limits = DEFAULT_CABINET_LIMITS) {
+  if (!isPackage(data)) return [{ name: fallbackName, title: titleOf(fallbackName), groups: [] }];
+  return readCabinetIndex(data, limits).entries.filter((entry) => isSection(entry.name)).map((entry) => ({ name: entry.name, title: titleOf(entry.name), groups: groupsOf(entry.name) }));
 }
-var MAX_NAME_BYTES = 240;
-var WINDOWS_PATH_CHARS = 160;
-var NAME_TAIL_CHARS = 8;
-var MIN_NAME_CHARS = 24;
-var encoder = new TextEncoder();
-function charsAvailable(parentPath) {
-  if (process.platform !== "win32") return Infinity;
-  const used = parentPath ? parentPath.length + 1 : 0;
-  return Math.max(MIN_NAME_CHARS, WINDOWS_PATH_CHARS - used - NAME_TAIL_CHARS);
-}
-function limitNameLength(name, maxChars) {
-  if (name.length <= maxChars && (name.length * 3 <= MAX_NAME_BYTES || encoder.encode(name).length <= MAX_NAME_BYTES)) return name;
-  let truncated = "";
-  let bytes = 0;
-  for (const character of name) {
-    const size = encoder.encode(character).length;
-    if (bytes + size > MAX_NAME_BYTES) break;
-    if (truncated.length + character.length > maxChars) break;
-    truncated += character;
-    bytes += size;
-  }
-  const lastSpace = truncated.lastIndexOf(" ");
-  if (lastSpace > truncated.length / 2) truncated = truncated.slice(0, lastSpace);
-  return truncated;
-}
-function tidyName(name) {
-  return name.replace(reservedRe, "").replace(windowsTrailingRe, "").replace(windowsReservedRe, "").replace(badLinkRe, "").replace(startsWithDotRe, "");
-}
-function sanitizeFileName(name, parentPath) {
-  const cleaned = tidyName(stripControlCharacters(
-    (name ?? "").normalize("NFC").replace(slashesRe, "-").replace(illegalRe, "")
-  ));
-  const limited = limitNameLength(cleaned, charsAvailable(parentPath));
-  const sanitized = limited === cleaned ? cleaned : tidyName(limited);
-  return sanitized.trim() || "Untitled";
-}
-function availableFileName(fileName, isTaken) {
-  const lastDotIndex = fileName.lastIndexOf(".");
-  const hasExtension = lastDotIndex > 0;
-  const base = hasExtension ? fileName.slice(0, lastDotIndex) : fileName;
-  const extension = hasExtension ? fileName.slice(lastDotIndex) : "";
-  for (let index = 0; ; index++) {
-    const candidate = index === 0 ? fileName : `${base} ${index}${extension}`;
-    if (!isTaken(candidate)) return candidate;
-  }
-}
-var NameRegistry = class {
-  taken = /* @__PURE__ */ new Map();
-  setFor(folder) {
-    let set = this.taken.get(folder);
-    if (!set) this.taken.set(folder, set = /* @__PURE__ */ new Set());
-    return set;
-  }
-  /** Case-insensitive, because macOS and Windows filesystems are. */
-  claim(folder, fileName) {
-    const set = this.setFor(folder);
-    const chosen = availableFileName(fileName, (candidate) => set.has(candidate.toLowerCase()));
-    set.add(chosen.toLowerCase());
-    return chosen;
-  }
-  has(folder, fileName) {
-    return this.taken.get(folder)?.has(fileName.toLowerCase()) ?? false;
-  }
-};
 
 // src/convert-file.ts
 var Workspace = class {
@@ -3405,7 +4269,7 @@ function parseArgs(argv) {
 var EXTENSIONS = /\.(one|onepkg|onex)$/i;
 function collect(inputs) {
   const found = [];
-  const walk = (current) => {
+  const walk2 = (current) => {
     const stat = nodeFs2.statSync(current);
     if (!stat.isDirectory()) {
       found.push(current);
@@ -3413,13 +4277,13 @@ function collect(inputs) {
     }
     for (const entry of nodeFs2.readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       const full = nodePath2.join(current, entry.name);
-      if (entry.isDirectory()) walk(full);
+      if (entry.isDirectory()) walk2(full);
       else if (EXTENSIONS.test(entry.name)) found.push(full);
     }
   };
   for (const input of inputs) {
     if (!nodeFs2.existsSync(input)) throw new UsageError(`No such file or folder: ${input}`);
-    walk(input);
+    walk2(input);
   }
   return found;
 }
