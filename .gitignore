@@ -1,0 +1,8 @@
+node_modules/
+out/
+*.log
+.DS_Store
+
+# Inputs you drop in yourself. Nothing here is committed, and nothing
+# about them leaves the machine.
+tests/local/
