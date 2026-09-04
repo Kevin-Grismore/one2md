@@ -64,8 +64,9 @@ A `.onepkg` costs far more again: its Cabinet folder expands **whole** even for
 one section, and the archive stays in memory beside it. `--sections` does not
 avoid that.
 
-**For any large notebook, extract it first.** Extraction streams, so it costs
-almost nothing, and it removes the archive cost entirely:
+**For a large notebook, extract it first.** A `.onepkg` is an LZX Cabinet
+archive, and any CAB extractor streams it, so extraction is nearly free and
+removes the archive cost entirely:
 
 ```bash
 7zz x notebook.onepkg -o./sections          # or 7z, or cabextract
@@ -75,6 +76,24 @@ node one2md.mjs ./sections -o ./out --notebook "My Notebook"
 `--notebook` restores the name the archive would have supplied, making the output
 identical to converting the `.onepkg` directly. If even that is too much memory,
 convert the extracted sections one file at a time into the same `-o` directory.
+
+### If no extractor is installed
+
+Sandboxes often have none — check before relying on one:
+
+```bash
+7zz --help || 7z --help || cabextract --version
+```
+
+If none is present, install one. Any CAB-capable extractor will do, so work out
+the right package for the environment rather than assuming a particular command;
+`p7zip-full` and `cabextract` are the usual names. It may not need elevation, and
+it may not persist, so expect to install again in a later session.
+
+Only do this when a notebook is actually large enough to need it. For anything
+that converts directly, extracting first is wasted work — and installing a tool
+the person did not ask for is worth a word first if the notebook turns out to be
+small enough after `--list`.
 
 Measured on a 725 MiB notebook: converting the `.onepkg` directly peaked at
 2,791 MiB; extracting it peaked at 4 MiB and converting one 60 MiB section at

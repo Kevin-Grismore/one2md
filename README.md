@@ -93,13 +93,17 @@ A `.onepkg` adds a much larger cost on top. A Cabinet folder is one continuous
 LZX stream, so it is expanded **whole** even when a single section is wanted,
 and the archive stays in memory beside it. `--sections` does not avoid this.
 
-**Extract the archive first.** Any CAB-capable extractor streams it, which turns
-the archive cost into nothing:
+**Extract the archive first.** A `.onepkg` is an LZX Cabinet archive, and any
+CAB extractor streams it, which turns the archive cost into nothing:
 
 ```bash
 7zz x notebook.onepkg -o./sections
 node dist/one2md.mjs ./sections -o ./out --notebook "My Notebook"
 ```
+
+`7zz`, `7z` and `cabextract` all work. None is guaranteed to be present — a
+sandbox often has none installed, and one installed there may not survive into
+the next session — so check for one before depending on it.
 
 `--notebook` restores the name the archive would have supplied, so the output is
 byte-identical to converting the `.onepkg` directly. Converting the sections one
