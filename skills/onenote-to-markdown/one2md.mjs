@@ -3332,7 +3332,7 @@ var DataElementType = /* @__PURE__ */ ((DataElementType2) => {
   DataElementType2[DataElementType2["RevisionManifest"] = 4] = "RevisionManifest";
   DataElementType2[DataElementType2["ObjectGroup"] = 5] = "ObjectGroup";
   DataElementType2[DataElementType2["DataElementFragment"] = 6] = "DataElementFragment";
-  DataElementType2[DataElementType2["ObjectDataBlob"] = 7] = "ObjectDataBlob";
+  DataElementType2[DataElementType2["ObjectDataBlob"] = 10] = "ObjectDataBlob";
   return DataElementType2;
 })(DataElementType || {});
 var NULL_SERIAL = { identifier: NIL_GUID, value: 0 };
@@ -3662,7 +3662,7 @@ function readDataElementPackage(data) {
       case 5 /* ObjectGroup */:
         objectGroups.set(key, readObjectGroup(data, element));
         break;
-      case 7 /* ObjectDataBlob */: {
+      case 10 /* ObjectDataBlob */: {
         const payload = expect(element.children.at(0), 2 /* ObjectDataBlob */, "a BLOB payload");
         blobs.set(key, data.subarray(payload.dataOffset, payload.dataOffset + payload.dataLength));
         break;
@@ -3886,7 +3886,7 @@ function buildObjectGraph(data, options = DEFAULT_READER_OPTIONS, parsed = readD
       if (item.propertyData) {
         const globalIds = buildGlobalIds(item, revision.cell);
         record.propertySet = readPropertySet(item.propertyData, globalIds, options, 0);
-        record.fileDataReference = readString(record, Property.fileDataReference);
+        record.fileDataReference = fileDataReferenceOf(record);
         record.fileExtension = readString(record, Property.fileDataExtension);
       }
       graph.objects.push(record);
@@ -3898,6 +3898,15 @@ function buildObjectGraph(data, options = DEFAULT_READER_OPTIONS, parsed = readD
     }
   }
   return graph;
+}
+function fileDataReferenceOf(record) {
+  const raw = readData(record, Property.fileDataReference);
+  if (raw?.length === 16) {
+    const hex = [...raw].map((byte) => byte.toString(16).padStart(2, "0"));
+    const at = (...order) => order.map((index) => hex[index]).join("");
+    return `<ifndf>{${at(3, 2, 1, 0)}-${at(5, 4)}-${at(7, 6)}-${at(8, 9)}-${at(10, 11, 12, 13, 14, 15)}}`;
+  }
+  return readString(record, Property.fileDataReference);
 }
 function fileDataId(reference) {
   if (!reference || !reference.toLowerCase().startsWith("<ifndf>")) return void 0;
