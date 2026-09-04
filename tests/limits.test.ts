@@ -93,3 +93,24 @@ test('the defaults are unchanged when nothing is passed', async () => {
 	assert.deepEqual(report.errors, []);
 	assert.ok(report.notes.length > 0);
 });
+
+test('a loose section can be told which notebook it came from', async () => {
+	// Extracting a .onepkg before converting is the route for a notebook too
+	// large to expand in memory, but the sections arrive as loose files with the
+	// notebook's name lost. Naming it restores both the folder and the front
+	// matter, so the cheaper route costs nothing in fidelity.
+	const withName = new MemorySink();
+	const without = new MemorySink();
+
+	await convertFile(fixture('testOneNote2016.one'), 'testOneNote2016.one', withName, { notebookName: 'Archive' });
+	await convertFile(fixture('testOneNote2016.one'), 'testOneNote2016.one', without);
+
+	const [named] = [...withName.files.keys()];
+	const [bare] = [...without.files.keys()];
+
+	assert.ok(named.startsWith('Archive/'), `expected a notebook folder, got ${named}`);
+	assert.ok(!bare.startsWith('Archive/'));
+
+	const text = new TextDecoder().decode(withName.files.get(named));
+	assert.match(text, /^notebook: "Archive"$/m);
+});

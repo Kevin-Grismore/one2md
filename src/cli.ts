@@ -24,6 +24,7 @@ Options:
   -o, --out <dir>        Where to write (default: ./out)
       --list             List the sections in each input and exit
       --sections <a,b>   Only convert these sections of a .onepkg (by entry name)
+      --notebook <name>  Name the notebook these sections came from
       --dry-run          Report what would be written without writing it
       --overwrite        Replace existing files instead of failing on them
       --no-attachments   Leave images and embedded files out
@@ -50,6 +51,7 @@ interface Options {
 	out: string;
 	list: boolean;
 	sections?: Set<string>;
+	notebook?: string;
 	dryRun: boolean;
 	overwrite: boolean;
 	attachments: boolean;
@@ -103,6 +105,7 @@ function parseArgs(argv: string[]): Options {
 			case '--sections':
 				options.sections = new Set(next(arg, argv[++i]).split(',').map(name => name.trim()).filter(Boolean));
 				break;
+			case '--notebook': options.notebook = next(arg, argv[++i]); break;
 			case '--dry-run': options.dryRun = true; break;
 			case '--overwrite': options.overwrite = true; break;
 			case '--no-attachments': options.attachments = false; break;
@@ -268,6 +271,7 @@ async function main(argv: string[]): Promise<number> {
 			nestSubpages: options.nest,
 			frontmatter: options.frontmatter,
 			sections: options.sections,
+			notebookName: options.notebook,
 			limits,
 			readerOptions,
 			workspace,

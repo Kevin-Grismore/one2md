@@ -35,6 +35,15 @@ export interface ConvertOptions {
 	/** Cabinet entry names to convert, for a `.onepkg` holding more than you want. */
 	sections?: ReadonlySet<string>;
 	/**
+	 * The notebook these sections belong to.
+	 *
+	 * A `.onepkg` names its own notebook, but sections extracted from one arrive
+	 * as loose files with that knowledge lost. Naming it restores the folder and
+	 * the front matter, so extracting a large notebook first costs nothing in
+	 * fidelity.
+	 */
+	notebookName?: string;
+	/**
 	 * Size ceilings for the archive. Raising one admits a larger notebook;
 	 * they exist so a malformed or hostile file cannot expand without bound.
 	 */
@@ -182,7 +191,8 @@ export async function convertFile(
 		return report;
 	}
 
-	const notebook = entries.length > 1 || entries[0]?.groups.length ? baseName(fileName) : undefined;
+	const notebook = opts.notebookName
+		?? (entries.length > 1 || entries[0]?.groups.length ? baseName(fileName) : undefined);
 	let index = 0;
 
 	for (const entry of entries) {

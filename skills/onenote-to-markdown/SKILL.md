@@ -53,27 +53,32 @@ notebook, or when the person only wants part of it — then pass
 ## Large notebooks
 
 Peak memory is set by the **largest section**, not the notebook — budget roughly
-**12-15x a section's expanded size**. `--list` reports those sizes without
-decompressing anything, so check before converting something big:
+**12x a section's expanded size**. `--list` reports those sizes without
+decompressing anything, so check first:
 
 ```bash
 node one2md.mjs --list notebook.onepkg
 ```
 
-A `.onepkg` costs more again: its Cabinet folder expands **whole** even for one
-section, and the archive stays in memory beside it, so the floor is about twice
-the notebook's expanded size. `--sections` does not avoid that.
+A `.onepkg` costs far more again: its Cabinet folder expands **whole** even for
+one section, and the archive stays in memory beside it. `--sections` does not
+avoid that.
 
-If a notebook is too large for the machine, extract it first and convert the
-sections as loose files — this skips the archive cost entirely:
+**For any large notebook, extract it first.** Extraction streams, so it costs
+almost nothing, and it removes the archive cost entirely:
 
 ```bash
-7z x notebook.onepkg -o./sections
-node one2md.mjs ./sections -o ./out
+7zz x notebook.onepkg -o./sections          # or 7z, or cabextract
+node one2md.mjs ./sections -o ./out --notebook "My Notebook"
 ```
 
-Then convert in batches if even that is too much, using the names `--list`
-printed. Output from several runs merges into one `-o` directory.
+`--notebook` restores the name the archive would have supplied, making the output
+identical to converting the `.onepkg` directly. If even that is too much memory,
+convert the extracted sections one file at a time into the same `-o` directory.
+
+Measured on a 725 MiB notebook: converting the `.onepkg` directly peaked at
+2,791 MiB; extracting it peaked at 4 MiB and converting one 60 MiB section at
+688 MiB.
 
 ## Options worth knowing
 

@@ -4066,7 +4066,7 @@ async function convertFile(data, fileName, sink, options = {}) {
     report.errors.push(failure(fileName, error));
     return report;
   }
-  const notebook = entries.length > 1 || entries[0]?.groups.length ? baseName(fileName) : void 0;
+  const notebook = opts.notebookName ?? (entries.length > 1 || entries[0]?.groups.length ? baseName(fileName) : void 0);
   let index = 0;
   for (const entry of entries) {
     if (opts.isCancelled?.()) {
@@ -4198,6 +4198,7 @@ Options:
   -o, --out <dir>        Where to write (default: ./out)
       --list             List the sections in each input and exit
       --sections <a,b>   Only convert these sections of a .onepkg (by entry name)
+      --notebook <name>  Name the notebook these sections came from
       --dry-run          Report what would be written without writing it
       --overwrite        Replace existing files instead of failing on them
       --no-attachments   Leave images and embedded files out
@@ -4262,6 +4263,9 @@ function parseArgs(argv) {
         break;
       case "--sections":
         options.sections = new Set(next(arg, argv[++i]).split(",").map((name) => name.trim()).filter(Boolean));
+        break;
+      case "--notebook":
+        options.notebook = next(arg, argv[++i]);
         break;
       case "--dry-run":
         options.dryRun = true;
@@ -4426,6 +4430,7 @@ async function main(argv) {
       nestSubpages: options.nest,
       frontmatter: options.frontmatter,
       sections: options.sections,
+      notebookName: options.notebook,
       limits,
       readerOptions,
       workspace,
