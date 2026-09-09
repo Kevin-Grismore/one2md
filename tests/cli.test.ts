@@ -416,6 +416,41 @@ test('a reader limit failure names the option that lifts it', () => {
 	}
 });
 
+test('an asset ceiling failure names --max-asset-bytes, and raising it converts', () => {
+	const tight = temp('asset-tight');
+	const raised = temp('asset-raised');
+
+	try {
+		const blocked = cli([
+			fixture(DESKTOP), '-o', tight, '--memory-budget', '8M', '--max-asset-bytes', '16',
+		]);
+
+		assert.equal(blocked.status, 1);
+		assert.match(blocked.stderr, /exceeds a safety limit/);
+		assert.match(blocked.stderr, /--max-asset-bytes/);
+
+		const run = cli([
+			fixture(DESKTOP), '-o', raised, '--memory-budget', '8M', '--max-asset-bytes', '64M',
+		]);
+
+		assert.equal(run.status, 0, run.stderr);
+		assert.match(run.stderr, /\d+ notes/);
+	}
+	finally {
+		nodeFs.rmSync(tight, { recursive: true, force: true });
+		nodeFs.rmSync(raised, { recursive: true, force: true });
+	}
+});
+
+test('--max-total-asset-bytes must be at least --max-asset-bytes', () => {
+	const run = cli([
+		fixture(DESKTOP), '--max-asset-bytes', '512M', '--max-total-asset-bytes', '64M',
+	]);
+
+	assert.equal(run.status, 2);
+	assert.match(run.stderr, /--max-total-asset-bytes must be at least --max-asset-bytes/);
+});
+
 // -- Temporary directories ----------------------------------------------------
 
 test('the stores clean up after themselves inside a supplied --temp-dir', () => {

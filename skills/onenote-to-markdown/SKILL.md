@@ -173,6 +173,7 @@ New failures to expect, all reported per page or per input:
 | Pages still in OneNote's recycle bin | `--include-deleted` |
 | Re-run into a folder that already has output | `--overwrite` |
 | Raise a size ceiling a big archive trips | `--max-entry-bytes`, `--max-expanded-bytes` |
+| Raise the embedded-file ceiling a large attachment trips | `--max-asset-bytes`, `--max-total-asset-bytes` |
 | Bound memory per section on a small machine | `--max-objects` (lower it) |
 | Convert a loose `.one` under a fixed memory ceiling | `--memory-budget`, `--temp-dir` |
 
@@ -182,8 +183,9 @@ in an `attachments/` folder beside the note.
 
 ## When a file will not convert
 
-Read `errors[].code` in the JSON and report it plainly. Do not retry, and do not
-fall back to reading the bytes yourself — these are real limits, not glitches.
+Read `errors[].code` in the JSON and report it plainly. Do not fall back to
+reading the bytes yourself. Raise a named ceiling only when the error names
+one; otherwise these are real limits, not glitches.
 
 - **`ONENOTE_ONEX_PROTECTED`** — the file is rights-protected and its contents
   are encrypted. Nothing can be recovered from it here.
@@ -195,6 +197,10 @@ fall back to reading the bytes yourself — these are real limits, not glitches.
 - **`ONENOTE_OBJECT_LIMIT`** — a section holds more objects than the reader will
   build. Convert fewer sections at a time, or raise `--max-objects` if there is
   memory for it.
+- **`ONENOTE_ASSET_LIMIT`** — a page embeds a file larger than the reader will
+  materialize (default 64 MiB each, 256 MiB in total per section). Raise
+  `--max-asset-bytes` and retry; if the section still fails, also raise
+  `--max-total-asset-bytes`. Or convert without embeds using `--no-attachments`.
 - **Anything else** — the file is damaged, or is not a OneNote section.
 
 A failure is reported per section, so a notebook with one bad section still

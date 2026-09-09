@@ -11673,6 +11673,12 @@ Options:
       --max-expanded-bytes <n>  Largest expanded archive, e.g. 4G (default 2G)
       --max-entries <n>         Most entries in an archive (default 4096)
       --max-objects <n>         Most objects per section (default 1000000)
+      --max-asset-bytes <n>     Largest embedded file in a section, e.g. 512M
+                                (default 64M). Also raises the section's
+                                total-asset ceiling to at least this size.
+      --max-total-asset-bytes <n>
+                                Sum of embedded files in one section
+                                (default 256M)
       --memory-budget <size>    Convert with a hard ceiling on the converter's
                                 own buffers, e.g. 8M. Selects the bounded path,
                                 which reads loose .one sections through a file
@@ -11773,6 +11779,12 @@ function parseArgs(argv) {
       case "--max-objects":
         options.maxObjects = parseCount(arg, next(arg, argv[++i]));
         break;
+      case "--max-asset-bytes":
+        options.maxAssetBytes = parseSize(arg, next(arg, argv[++i]));
+        break;
+      case "--max-total-asset-bytes":
+        options.maxTotalAssetBytes = parseSize(arg, next(arg, argv[++i]));
+        break;
       case "--memory-budget":
         options.memoryBudget = parseSize(arg, next(arg, argv[++i]));
         break;
@@ -11795,6 +11807,19 @@ function parseArgs(argv) {
   }
   if (options.inputs.length === 0) throw new UsageError("No input files given");
   return options;
+}
+function readerOptionsFrom(options) {
+  const maxAssetBytes = options.maxAssetBytes ?? DEFAULT_READER_OPTIONS.maxAssetBytes;
+  const maxTotalAssetBytes = options.maxTotalAssetBytes ?? Math.max(DEFAULT_READER_OPTIONS.maxTotalAssetBytes, maxAssetBytes);
+  if (maxTotalAssetBytes < maxAssetBytes) {
+    throw new UsageError("--max-total-asset-bytes must be at least --max-asset-bytes");
+  }
+  return {
+    ...DEFAULT_READER_OPTIONS,
+    ...options.maxObjects !== void 0 && { maxObjects: options.maxObjects },
+    maxAssetBytes,
+    maxTotalAssetBytes
+  };
 }
 var EXTENSIONS = /\.(one|onepkg|onex)$/i;
 function collect(inputs) {
@@ -11855,7 +11880,7 @@ var ADVICE = {
   ONENOTE_CAB_ENTRY_LIMIT: "Raise it with --max-entry-bytes, e.g. --max-entry-bytes 2G.",
   ONENOTE_CAB_EXPANDED_LIMIT: "Raise it with --max-expanded-bytes, e.g. --max-expanded-bytes 6G. Note that a .onepkg expands whole, so this also needs the memory to hold it.",
   ONENOTE_OBJECT_LIMIT: "Raise it with --max-objects, or convert fewer sections at a time with --sections.",
-  ONENOTE_ASSET_LIMIT: "A page embeds a file larger than the reader will materialize. Convert without it using --no-attachments, or raise the reader's asset ceiling.",
+  ONENOTE_ASSET_LIMIT: "A page embeds a file larger than the reader will materialize. Raise it with --max-asset-bytes, e.g. --max-asset-bytes 512M, or skip embeds with --no-attachments. If a section holds many large files, also raise --max-total-asset-bytes.",
   // The bounded path's own failures. Each of these can only happen under
   // --memory-budget, and each has a different thing to do about it.
   ONENOTE_VALUE_LIMIT: "A page holds a title, link, file name or maths run larger than the memory budget allows to become a string. Raise --memory-budget, which raises the ceiling with it, or convert this file without --memory-budget.",
@@ -11990,10 +12015,7 @@ async function main(argv) {
     ...options.maxExpandedBytes !== void 0 && { maxExpandedBytes: options.maxExpandedBytes },
     ...options.maxEntries !== void 0 && { maxEntries: options.maxEntries }
   };
-  const readerOptions = {
-    ...DEFAULT_READER_OPTIONS,
-    ...options.maxObjects !== void 0 && { maxObjects: options.maxObjects }
-  };
+  const readerOptions = readerOptionsFrom(options);
   let budget;
   if (bounded) {
     if (options.tempDir !== void 0) {

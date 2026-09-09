@@ -122,7 +122,10 @@ one — so this route scales to notebooks that cannot be expanded in RAM at all.
 
 The caps that stop a runaway archive are adjustable: `--max-entry-bytes`,
 `--max-expanded-bytes`, `--max-entries`, and `--max-objects` (which bounds heap
-per section, and is worth *lowering* on a small machine). Defaults are
+per section, and is worth *lowering* on a small machine). Embedded files have
+their own ceilings: `--max-asset-bytes` (one file, default 64M) and
+`--max-total-asset-bytes` (the sum in a section, default 256M). Raising the
+per-file flag also raises the total to at least that size. Defaults are
 conservative on purpose — they are what stops a malformed file expanding without
 bound.
 
