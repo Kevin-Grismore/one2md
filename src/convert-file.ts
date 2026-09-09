@@ -264,8 +264,6 @@ async function convertSection(section: Section, sectionDir: string, ctx: Section
 		const notePath = join(target, noteName);
 		const stem = noteName.replace(/\.md$/, '');
 
-		opts.onProgress?.({ kind: 'note', name: stem, index: ++done, total: pages.length });
-
 		try {
 			const attachmentsDir = join(target, opts.attachmentsDir);
 
@@ -290,6 +288,7 @@ async function convertSection(section: Section, sectionDir: string, ctx: Section
 			report.errors.push(failure(stem, error));
 		}
 
+		opts.onProgress?.({ kind: 'note', name: stem, index: ++done, total: pages.length });
 		levels.push(join(target, stem));
 	}
 }

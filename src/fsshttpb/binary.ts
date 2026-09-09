@@ -62,15 +62,20 @@ export interface StreamObjectHeader {
  * Every read is bounds-checked against the buffer and against an optional
  * `limit`, so a structure that claims to be longer than its parent cannot walk
  * off into the next one.
+ *
+ * `base` is where `data[0]` sits in the file. It is zero when the buffer is the
+ * file, and non-zero when the buffer is a window onto it — a bounded-memory
+ * read decodes a field from a few borrowed bytes, and an error about that field
+ * has to name where in the file it was, not where in the scratch buffer.
  */
 export class Cursor {
 	position: number;
 
-	constructor(readonly data: Uint8Array, start = 0, private limit = data.length) {
+	constructor(readonly data: Uint8Array, start = 0, private limit = data.length, readonly base = 0) {
 		this.position = start;
 		if (limit > data.length) {
 			throw new OneNoteFormatError('ONENOTE_FSSHTTPB_RANGE',
-				'A structure claims to extend past the end of the file.', start);
+				'A structure claims to extend past the end of the file.', base + start);
 		}
 	}
 
@@ -85,13 +90,13 @@ export class Cursor {
 	/** A cursor over `length` bytes starting here, without copying. */
 	sub(length: number): Cursor {
 		this.ensure(length);
-		return new Cursor(this.data, this.position, this.position + length);
+		return new Cursor(this.data, this.position, this.position + length, this.base);
 	}
 
 	private ensure(length: number): void {
 		if (length < 0 || this.position + length > this.limit) {
 			throw new OneNoteFormatError('ONENOTE_FSSHTTPB_RANGE',
-				`Reading ${length} bytes would pass the end of the structure.`, this.position);
+				`Reading ${length} bytes would pass the end of the structure.`, this.base + this.position);
 		}
 	}
 
@@ -156,7 +161,7 @@ export class Cursor {
 		const first = this.data[this.position];
 		if (this.position >= this.limit) {
 			throw new OneNoteFormatError('ONENOTE_FSSHTTPB_RANGE',
-				'A compact integer begins past the end of the structure.', this.position);
+				'A compact integer begins past the end of the structure.', this.base + this.position);
 		}
 
 		if (first === 0) {
@@ -172,7 +177,7 @@ export class Cursor {
 			const value = high * 0x1_0000_0000 + low;
 			if (!Number.isSafeInteger(value)) {
 				throw new OneNoteFormatError('ONENOTE_FSSHTTPB_HUGE_INTEGER',
-					'A compact integer exceeds the range this reader supports.', this.position - 9);
+					'A compact integer exceeds the range this reader supports.', this.base + this.position - 9);
 			}
 			return value;
 		}
@@ -230,7 +235,7 @@ export class Cursor {
 		}
 
 		throw new OneNoteFormatError('ONENOTE_FSSHTTPB_EXTENDED_GUID',
-			`Byte 0x${first.toString(16)} does not begin any Extended GUID encoding.`, start);
+			`Byte 0x${first.toString(16)} does not begin any Extended GUID encoding.`, this.base + start);
 	}
 
 	/** [MS-FSSHTTPB] 2.2.1.10 — a cell identifier: a pair of Extended GUIDs. */
@@ -274,7 +279,8 @@ export class Cursor {
 	 * carries its real length in a compact integer that follows.
 	 */
 	readStreamObjectHeader(): StreamObjectHeader {
-		const offset = this.position;
+		const start = this.position;
+		const offset = this.base + start;
 		const first = this.data[this.position];
 
 		if (this.atEnd) {
@@ -307,7 +313,7 @@ export class Cursor {
 					type: (header >>> 3) & 0x3fff,
 					length,
 					offset,
-					headerLength: this.position - offset,
+					headerLength: this.position - start,
 				};
 			}
 			case 0x01: {

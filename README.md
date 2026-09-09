@@ -62,7 +62,9 @@ Inputs may be files or folders to search.
 
 Exit status is `0` when everything converted, `1` when any input or section
 failed, `2` on bad usage. `--json` reports every note and attachment written,
-everything skipped, and every failure with its `kind` and `code`.
+everything skipped, and every failure with its `kind` and `code`. Page progress
+is written to stderr as `page 12/340: Title`, so JSON stdout stays valid;
+`--quiet` suppresses it.
 
 ## Both encodings
 
@@ -122,9 +124,115 @@ one — so this route scales to notebooks that cannot be expanded in RAM at all.
 
 The caps that stop a runaway archive are adjustable: `--max-entry-bytes`,
 `--max-expanded-bytes`, `--max-entries`, and `--max-objects` (which bounds heap
-per section, and is worth *lowering* on a small machine). Defaults are
+per section, and is worth *lowering* on a small machine). Embedded files have
+their own ceilings: `--max-asset-bytes` (one file, default 64M) and
+`--max-total-asset-bytes` (the sum in a section, default 256M). Raising the
+per-file flag also raises the total to at least that size. Defaults are
 conservative on purpose — they are what stops a malformed file expanding without
 bound.
+
+### A fixed memory ceiling: `--memory-budget`
+
+Everything above scales with the input. `--memory-budget` does not: it converts
+a loose `.one` section through a path that indexes the file on disk and streams
+a page at a time, so the memory the converter uses is the number you gave it
+whatever the section's size.
+
+```bash
+7zz x notebook.onepkg -o./sections
+node dist/one2md.mjs ./sections -o ./out --notebook "My Notebook" \
+  --memory-budget 8M --temp-dir /var/tmp
+```
+
+Output is byte-identical to converting without the flag. This is a different
+storage layer under the same conversion, not a different converter, and the
+test suite checks the two agree on every fixture in both encodings.
+
+**Scope: loose `.one` sections only.** A `.onepkg` or `.onex` named directly is
+refused rather than silently converted the unbounded way, because reaching a
+section inside one means expanding the Cabinet folder whole — the single
+largest allocation in this program, and the thing a budget is being asked to
+avoid. Extract first, as above, and point the converter at the folder. The same
+refusal applies to an archive found by scanning a folder: that input fails and
+the rest of the batch continues.
+
+**What the number covers.** Every buffer the converter allocates and every
+string it chooses to build: the three page caches, the read window, the write
+and spill buffers, a reserve for the record copies a store hands to its
+callers, and a reserve for the handful of values that have no streaming form —
+a page title, because it becomes a file name; a hyperlink target; a maths run,
+because NFKC normalization needs the whole string. The ceilings on those values
+are derived from the reserve, so a title too large to fit is a reported failure
+on that page rather than an allocation the budget did not plan for.
+
+The floor is 1 MiB. Below that the reserves and the three caches cannot all
+have their minimum and there is nothing left for the read window, so it is
+refused with a message saying so rather than quietly under-provisioned.
+
+**What it does not cover**, and cannot:
+
+- Node and V8 themselves. An idle Node is tens of megabytes of resident set
+  before a byte of OneNote is read, and no option here changes that.
+- Garbage V8 has not yet collected. The reserve covers the copies that are
+  live at once, not how promptly the collector reclaims the dead ones.
+- The kernel's page cache over the temporary files, which is reclaimable
+  memory the operating system manages rather than an allocation.
+
+So `--memory-budget 8M` means the converter's own memory is eight mebibytes. It
+does not mean the process is eight mebibytes, and it never could.
+
+**Temporary disk.** The index, the resolver cache and the output bookkeeping
+live in files instead of in the heap — that is the trade. Expect temporary
+space on the order of the section's size. `--temp-dir` chooses where; each
+store creates and removes its own subdirectory and never touches the root you
+gave it. A full disk or a quota there is reported as such, with the directory
+named.
+
+**Cost.** Slower than the default path — every lookup that was a `Map` is now a
+page read — and it needs the disk. Use it when a section will not fit in
+memory, or when memory is capped and the failure has to be an error rather than
+an out-of-memory kill. `--memory-budget` and `--temp-dir` are the only way in;
+without them nothing changes.
+
+Before conversion, a metadata-only page pass obtains an exact progress total.
+It does not render bodies or assets and keeps visited IDs in the temporary
+store, but it does repeat page metadata lookups.
+
+**Cancelling.** Ctrl-C stops the run: the note being written is abandoned and
+its file removed, the notes already finished stay where they are, the temporary
+stores are cleaned up, and the exit code is 130. A cancelled run reports
+`"ok": false` and marks the input `"cancelled": true`, because a conversion
+that stopped early is not a conversion that succeeded, and a script that cannot
+tell those apart will publish a notebook with pages missing. A second Ctrl-C
+exits immediately, and still deletes the note and asset it was in the middle of
+writing before it goes.
+
+Interruption is checked between pages, so a Ctrl-C lands within one page rather
+than instantly — on a page holding a very large attachment, that is however long
+the attachment takes to copy.
+
+**Measured.** `scripts/bench-bounded.mjs` generates loose sections in both
+encodings at increasing sizes, converts each in a child process under one
+budget, and checks three things: that the output matches the default path byte
+for byte, that the converter's own accounted high-water mark does not move as
+the input grows, and that the conversion completes under a hard
+`--max-old-space-size`. On a run over sections of 3.1 MiB and 12.4 MiB — four
+times the input — the accounted high water was identical at both sizes, in both
+encodings, and every conversion fitted inside a 96 MiB heap.
+
+Resident set size is reported alongside and is deliberately not claimed to be
+flat. It was 193 MiB and 241 MiB for those two desktop sections, which is Node,
+the JIT and uncollected garbage rather than the converter: the same runs fitted
+inside a 96 MiB heap when V8 was told to enforce one, which is what shows the
+growth is slack rather than retention. RSS is in the table because a real
+regression would show up in it, not because the number itself means much.
+
+The generated sizes need .NET and OfficeIMO, and the benchmark skips itself
+when they are absent. The committed fixtures are all under 200 KiB and prove
+nothing about scale — but the heap-cap checks that do not need generation are
+in the test suite and always run, including one that decodes a three-million
+point ink path inside a 40 MiB heap and requires the array-based decoder it
+replaced to run out of memory on the same input.
 
 ### What did not work
 
