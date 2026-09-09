@@ -62,7 +62,9 @@ Inputs may be files or folders to search.
 
 Exit status is `0` when everything converted, `1` when any input or section
 failed, `2` on bad usage. `--json` reports every note and attachment written,
-everything skipped, and every failure with its `kind` and `code`.
+everything skipped, and every failure with its `kind` and `code`. Page progress
+is written to stderr as `page 12/340: Title`, so JSON stdout stays valid;
+`--quiet` suppresses it.
 
 ## Both encodings
 
@@ -191,6 +193,10 @@ page read — and it needs the disk. Use it when a section will not fit in
 memory, or when memory is capped and the failure has to be an error rather than
 an out-of-memory kill. `--memory-budget` and `--temp-dir` are the only way in;
 without them nothing changes.
+
+Before conversion, a metadata-only page pass obtains an exact progress total.
+It does not render bodies or assets and keeps visited IDs in the temporary
+store, but it does repeat page metadata lookups.
 
 **Cancelling.** Ctrl-C stops the run: the note being written is abandoned and
 its file removed, the notes already finished stay where they are, the temporary

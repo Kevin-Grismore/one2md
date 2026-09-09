@@ -235,10 +235,10 @@ async function convertOne(entry: SectionSource, ctx: FileContext): Promise<void>
 /**
  * The pages of one section, in order.
  *
- * The progress events carry a total, and the eager path knows it because it has
- * the array. Here the count is not known until the last page has been reached,
- * so the total grows as the section is walked — a caller driving a progress bar
- * sees it settle rather than start correct.
+ * The bounded path first walks page metadata to get the exact filtered total.
+ * `StreamSection` gives that walk and the conversion walk separate disk-backed
+ * visited generations, so counting adds no per-page heap state. Metadata is
+ * resolved twice; retaining it would break the memory ceiling.
  */
 async function convertPages(
 	section: StreamSection,
@@ -248,6 +248,12 @@ async function convertPages(
 ): Promise<void> {
 	const { opts, workspace } = ctx;
 	const label = section.name || entry.title;
+	const total = await section.countPages(opts.includeDeleted, opts.isCancelled);
+
+	if (total === undefined) {
+		workspace.cancelled = true;
+		return;
+	}
 
 	// A page's folder is only spoken for once one of its subpages arrives, so a
 	// page with no children leaves no empty folder behind. The folders live in
@@ -289,8 +295,6 @@ async function convertPages(
 		const notePath = join(target, noteName);
 		const stem = noteName.replace(/\.md$/, '');
 
-		opts.onProgress?.({ kind: 'note', name: stem, index: ++done, total: done });
-
 		try {
 			await writeNote(section, page, notePath, stem, target, label, entry, ctx);
 			workspace.recordNote(notePath);
@@ -308,6 +312,7 @@ async function convertPages(
 			workspace.recordFailure(stem, error);
 		}
 
+		opts.onProgress?.({ kind: 'note', name: stem, index: ++done, total });
 		levels.set(depth + 1, join(target, stem));
 	}
 }

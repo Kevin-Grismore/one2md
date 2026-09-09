@@ -384,6 +384,12 @@ function log(quiet: boolean, line: string): void {
 	if (!quiet) process.stderr.write(`${line}\n`);
 }
 
+/** Progress shared by eager and bounded conversion; JSON remains on stdout. */
+function reportProgress(quiet: boolean, event: import('./convert-file').ProgressEvent): void {
+	const label = event.kind === 'section' ? 'section' : 'page';
+	log(quiet, `  ${label} ${event.index}/${event.total}: ${event.name}`);
+}
+
 /**
  * Print a report's failures, with whatever advice the code has.
  *
@@ -472,11 +478,7 @@ async function runBoundedCli(
 				notebookName: options.notebook,
 			},
 			onStart: file => log(options.quiet, `Reading ${file}`),
-			onProgress: event => {
-				if (event.kind === 'section') {
-					log(options.quiet, `  section ${event.index}/${event.total}: ${event.name}`);
-				}
-			},
+			onProgress: event => reportProgress(options.quiet, event),
 			onInput: group => {
 				const notes = group.to.notes - group.from.notes;
 				const attachments = group.to.attachments - group.from.attachments;
@@ -687,9 +689,7 @@ async function main(argv: string[]): Promise<number> {
 			limits,
 			readerOptions,
 			workspace,
-			onProgress: event => {
-				if (event.kind === 'section') log(options.quiet, `  section ${event.index}/${event.total}: ${event.name}`);
-			},
+			onProgress: event => reportProgress(options.quiet, event),
 		});
 
 		report.input = file;

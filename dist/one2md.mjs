@@ -4117,7 +4117,6 @@ async function convertSection(section, sectionDir, ctx) {
     const noteName = names.claim(target, `${title}.md`);
     const notePath = join(target, noteName);
     const stem = noteName.replace(/\.md$/, "");
-    opts.onProgress?.({ kind: "note", name: stem, index: ++done, total: pages.length });
     try {
       const attachmentsDir = join(target, opts.attachmentsDir);
       const converted = await convertPage(page, {
@@ -4138,6 +4137,7 @@ async function convertSection(section, sectionDir, ctx) {
     } catch (error) {
       report.errors.push(failure(stem, error));
     }
+    opts.onProgress?.({ kind: "note", name: stem, index: ++done, total: pages.length });
     levels.push(join(target, stem));
   }
 }
@@ -10920,6 +10920,33 @@ var StreamSection = class _StreamSection {
     };
   }
   /**
+   * Count the pages a conversion will attempt without resolving titles or
+   * touching page bodies and assets.
+   *
+   * Exactness requires resolving each page space far enough to prove that it
+   * has the same manifest and page node `pages()` requires, and to read its
+   * deletion marker. Conversion resolves that metadata again on its second
+   * walk; keeping it would make the heap grow with the section. The visited
+   * identifiers for both walks stay in separate generations in the paged
+   * store instead.
+   *
+   * `undefined` means cancellation was requested. Yielding once per candidate
+   * keeps a large pre-count interruptible even though store reads are
+   * synchronous.
+   */
+  async countPages(includeDeleted = false, isCancelled) {
+    let count = 0;
+    for (const spaceId of this.#pageSpaceIds()) {
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
+      if (isCancelled?.()) return void 0;
+      const deleted = this.#pageDeletionState(spaceId);
+      if (deleted !== void 0 && (includeDeleted || !deleted)) count++;
+    }
+    return count;
+  }
+  /**
    * The section's pages, one resolved at a time.
    *
    * Consuming this lazily is the point: the sequence holds a page's object
@@ -10927,6 +10954,19 @@ var StreamSection = class _StreamSection {
    * pages costs what its largest page costs, not what all of them do.
    */
   *pages() {
+    for (const spaceId of this.#pageSpaceIds()) {
+      const page = this.#page(spaceId);
+      if (page) yield page;
+    }
+  }
+  /**
+   * Page-space identifiers in section order, unique within this traversal.
+   *
+   * Every call owns a generation in the disk-backed visited namespace. That
+   * makes the metadata pre-count and conversion independent without an
+   * unbounded heap Set or a store-wide reset.
+   */
+  *#pageSpaceIds() {
     const root = this.#sectionSpace.root(1);
     const rootView = this.#sectionSpace.properties(root);
     const walk2 = ++this.#walks;
@@ -10941,8 +10981,7 @@ var StreamSection = class _StreamSection {
         if (this.#store.has(key)) continue;
         this.#store.set(key, EMPTY3);
         visited++;
-        const page = this.#page(spaceId);
-        if (page) yield page;
+        yield spaceId;
       }
     }
   }
@@ -10999,6 +11038,18 @@ var StreamSection = class _StreamSection {
         await this.#renderer.render(space, pageNode, note, options);
       }
     };
+  }
+  /**
+   * The least metadata needed to decide whether `#page` would yield and
+   * whether conversion filters it. `undefined` means this is not a page.
+   */
+  #pageDeletionState(spaceId) {
+    const space = this.#resolver.tryGetSpace(spaceId);
+    if (!space) return void 0;
+    const manifest = space.root(1);
+    if (manifest?.jcid !== Jcid.pageManifestNode || !this.#pageNodeOf(space, manifest)) return void 0;
+    const metadata = space.properties(space.root(2));
+    return dataRange(metadata, Property.isDeletedGraphSpaceContent) !== void 0;
   }
   #pageNodeOf(space, manifest) {
     const view = space.properties(manifest);
@@ -11394,6 +11445,11 @@ async function convertOne(entry, ctx) {
 async function convertPages(section, sectionDir, entry, ctx) {
   const { opts, workspace } = ctx;
   const label = section.name || entry.title;
+  const total = await section.countPages(opts.includeDeleted, opts.isCancelled);
+  if (total === void 0) {
+    workspace.cancelled = true;
+    return;
+  }
   const levels = workspace.openSubpageLevels(sectionDir);
   let done = 0;
   for (const page of section.pages()) {
@@ -11411,7 +11467,6 @@ async function convertPages(section, sectionDir, entry, ctx) {
     const noteName = workspace.claim(target, `${sanitizeFileName(page.title)}.md`);
     const notePath = join3(target, noteName);
     const stem = noteName.replace(/\.md$/, "");
-    opts.onProgress?.({ kind: "note", name: stem, index: ++done, total: done });
     try {
       await writeNote(section, page, notePath, stem, target, label, entry, ctx);
       workspace.recordNote(notePath);
@@ -11422,6 +11477,7 @@ async function convertPages(section, sectionDir, entry, ctx) {
       }
       workspace.recordFailure(stem, error);
     }
+    opts.onProgress?.({ kind: "note", name: stem, index: ++done, total });
     levels.set(depth + 1, join3(target, stem));
   }
 }
@@ -11902,6 +11958,10 @@ function log(quiet, line) {
   if (!quiet) process.stderr.write(`${line}
 `);
 }
+function reportProgress(quiet, event) {
+  const label = event.kind === "section" ? "section" : "page";
+  log(quiet, `  ${label} ${event.index}/${event.total}: ${event.name}`);
+}
 function reportFailures(failures) {
   for (const error of failures) {
     process.stderr.write(`  ! ${error.name}: ${REASONS[error.kind] ?? error.kind} \u2014 ${error.message}
@@ -11949,11 +12009,7 @@ async function runBoundedCli(files, options, budget, readerOptions) {
         notebookName: options.notebook
       },
       onStart: (file) => log(options.quiet, `Reading ${file}`),
-      onProgress: (event) => {
-        if (event.kind === "section") {
-          log(options.quiet, `  section ${event.index}/${event.total}: ${event.name}`);
-        }
-      },
+      onProgress: (event) => reportProgress(options.quiet, event),
       onInput: (group) => {
         const notes = group.to.notes - group.from.notes;
         const attachments = group.to.attachments - group.from.attachments;
@@ -12109,9 +12165,7 @@ ${ADVICE.ONE2MD_TEMP_DIR_LIMIT}`
       limits,
       readerOptions,
       workspace,
-      onProgress: (event) => {
-        if (event.kind === "section") log(options.quiet, `  section ${event.index}/${event.total}: ${event.name}`);
-      }
+      onProgress: (event) => reportProgress(options.quiet, event)
     });
     report.input = file;
     reports.push(report);

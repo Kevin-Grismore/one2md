@@ -316,6 +316,66 @@ test('a section can be walked twice, and each walk skips its own repeats', () =>
 	}
 });
 
+test('the metadata pre-count is exact and leaves the conversion walk intact', async () => {
+	const fixture = fixtures(['.one']).find(entry => entry.name === 'handwriting_recognition.one')!;
+	const data = new Uint8Array(nodeFs.readFileSync(fixture.path));
+
+	const workspace = new StreamWorkspace();
+	const assets = new AssetWriter(asChunkedSink(new NullSink()), workspace, { writeAttachments: false });
+	const section = StreamSection.open(new Uint8ArrayByteSource(data), assets);
+
+	try {
+		const expected = [...section.pages()].filter(page => !page.isDeleted).length;
+		assert.ok(expected > 1, 'the fixture should prove a changing progress index');
+		assert.equal(await section.countPages(false), expected);
+		assert.equal([...section.pages()].length, expected,
+			'counting consumed or changed the following page traversal');
+
+		// No committed fixture currently contains a deleted page, but this
+		// still pins includeDeleted to the same filter the conversion walk uses.
+		const all = [...section.pages()];
+		assert.equal(await section.countPages(true), all.length);
+		assert.equal(await section.countPages(false), all.filter(page => !page.isDeleted).length);
+	}
+	finally {
+		section.close();
+		workspace.close();
+	}
+});
+
+test('bounded note progress carries the exact filtered total', async () => {
+	const fixture = fixtures(['.one']).find(entry => entry.name === 'handwriting_recognition.one')!;
+	const data = new Uint8Array(nodeFs.readFileSync(fixture.path));
+	const events: { index: number, total: number }[] = [];
+	const workspace = new StreamWorkspace();
+
+	try {
+		await convertFileStream(data, fixture.name, new NullSink(), {
+			workspace,
+			onProgress: event => {
+				if (event.kind === 'note') events.push({ index: event.index, total: event.total });
+			},
+		});
+
+		assert.deepEqual(events, [
+			{ index: 1, total: 2 },
+			{ index: 2, total: 2 },
+		]);
+	}
+	finally {
+		workspace.close();
+	}
+});
+
+test('the page pre-count keeps no per-page heap collection', () => {
+	const source = nodeFs.readFileSync(nodePath.join(SOURCE_ROOT, 'src/stream/section.ts'), 'utf8');
+	const count = source.slice(source.indexOf('async countPages('), source.indexOf('\n\t/**', source.indexOf('async countPages(')));
+
+	assert.doesNotMatch(count, /new (?:Set|Map)|\[\]|\.push\(/,
+		'the pre-count should count scalars while visited IDs stay in the paged store');
+	assert.match(count, /#pageSpaceIds\(\)/);
+});
+
 // -- The report, streamed ----------------------------------------------------
 
 test('the streamed JSON report is what JSON.stringify would have produced', () => {

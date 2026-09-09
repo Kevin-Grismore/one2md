@@ -129,6 +129,49 @@ test('a section too large for the budget still converts, a page at a time', () =
 	}
 });
 
+test('both CLI paths print page progress with an exact total', () => {
+	const bounded = temp('progress-bounded');
+	const eager = temp('progress-eager');
+
+	try {
+		const input = fixture('handwriting_recognition.one');
+		const boundedRun = cli([input, '-o', bounded, '--memory-budget', '1M']);
+		const eagerRun = cli([input, '-o', eager]);
+
+		assert.equal(boundedRun.status, 0, boundedRun.stderr);
+		assert.equal(eagerRun.status, 0, eagerRun.stderr);
+
+		for (const run of [boundedRun, eagerRun]) {
+			assert.match(run.stderr, /  page 1\/2: .+\n/);
+			assert.match(run.stderr, /  page 2\/2: .+\n/);
+			assert.doesNotMatch(run.stdout, /page \d+\/\d+/,
+				'progress belongs on stderr, not report stdout');
+		}
+	}
+	finally {
+		nodeFs.rmSync(bounded, { recursive: true, force: true });
+		nodeFs.rmSync(eager, { recursive: true, force: true });
+	}
+});
+
+test('--quiet suppresses page progress and JSON stdout stays valid', () => {
+	const out = temp('progress-json');
+
+	try {
+		const run = cli([
+			fixture('handwriting_recognition.one'), '-o', out,
+			'--memory-budget', '1M', '--json', '--quiet',
+		]);
+
+		assert.equal(run.status, 0, run.stderr);
+		assert.doesNotMatch(run.stderr, /page \d+\/\d+/);
+		assert.equal(JSON.parse(run.stdout).ok, true);
+	}
+	finally {
+		nodeFs.rmSync(out, { recursive: true, force: true });
+	}
+});
+
 // -- Dry run ------------------------------------------------------------------
 
 test('a bounded dry run reports what it would write and writes nothing', () => {

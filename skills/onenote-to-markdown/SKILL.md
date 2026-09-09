@@ -36,7 +36,8 @@ Always pass `--json` — the report on stdout tells you exactly what happened:
 ```
 
 Exit status is `0` when everything converted, `1` when any section failed,
-`2` on bad usage. Progress goes to stderr, so `--json` stdout stays clean.
+`2` on bad usage. Page progress goes to stderr as `page 12/340: Title`, so
+`--json` stdout stays clean; `--quiet` suppresses it.
 
 ## Look before converting
 
@@ -113,6 +114,10 @@ node one2md.mjs ./sections -o ./out --notebook "My Notebook" \
 
 The output is byte-identical to converting without the flag, so there is no
 reason to check the result differently.
+
+The bounded path first makes a metadata-only page pass to obtain the exact
+progress total. It does not render page bodies or assets and keeps traversal
+state on disk, though page metadata is looked up again during conversion.
 
 **It takes loose `.one` sections only.** Naming a `.onepkg` or `.onex` with
 `--memory-budget` set is an error, not a fallback: reaching a section inside one

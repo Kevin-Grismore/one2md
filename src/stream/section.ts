@@ -302,6 +302,38 @@ export class StreamSection {
 	}
 
 	/**
+	 * Count the pages a conversion will attempt without resolving titles or
+	 * touching page bodies and assets.
+	 *
+	 * Exactness requires resolving each page space far enough to prove that it
+	 * has the same manifest and page node `pages()` requires, and to read its
+	 * deletion marker. Conversion resolves that metadata again on its second
+	 * walk; keeping it would make the heap grow with the section. The visited
+	 * identifiers for both walks stay in separate generations in the paged
+	 * store instead.
+	 *
+	 * `undefined` means cancellation was requested. Yielding once per candidate
+	 * keeps a large pre-count interruptible even though store reads are
+	 * synchronous.
+	 */
+	async countPages(
+		includeDeleted = false,
+		isCancelled?: () => boolean,
+	): Promise<number | undefined> {
+		let count = 0;
+
+		for (const spaceId of this.#pageSpaceIds()) {
+			await new Promise<void>(resolve => { setImmediate(resolve); });
+			if (isCancelled?.()) return undefined;
+
+			const deleted = this.#pageDeletionState(spaceId);
+			if (deleted !== undefined && (includeDeleted || !deleted)) count++;
+		}
+
+		return count;
+	}
+
+	/**
 	 * The section's pages, one resolved at a time.
 	 *
 	 * Consuming this lazily is the point: the sequence holds a page's object
@@ -309,6 +341,20 @@ export class StreamSection {
 	 * pages costs what its largest page costs, not what all of them do.
 	 */
 	*pages(): IterableIterator<StreamPage> {
+		for (const spaceId of this.#pageSpaceIds()) {
+			const page = this.#page(spaceId);
+			if (page) yield page;
+		}
+	}
+
+	/**
+	 * Page-space identifiers in section order, unique within this traversal.
+	 *
+	 * Every call owns a generation in the disk-backed visited namespace. That
+	 * makes the metadata pre-count and conversion independent without an
+	 * unbounded heap Set or a store-wide reset.
+	 */
+	*#pageSpaceIds(): IterableIterator<IndexedGuid> {
 		const root = this.#sectionSpace.root(1)!;
 		const rootView = this.#sectionSpace.properties(root);
 
@@ -333,9 +379,7 @@ export class StreamSection {
 				if (this.#store.has(key)) continue;
 				this.#store.set(key, EMPTY);
 				visited++;
-
-				const page = this.#page(spaceId);
-				if (page) yield page;
+				yield spaceId;
 			}
 		}
 	}
@@ -401,6 +445,22 @@ export class StreamSection {
 				await this.#renderer.render(space, pageNode, note, options);
 			},
 		};
+	}
+
+	/**
+	 * The least metadata needed to decide whether `#page` would yield and
+	 * whether conversion filters it. `undefined` means this is not a page.
+	 */
+	#pageDeletionState(spaceId: IndexedGuid): boolean | undefined {
+		const space = this.#resolver.tryGetSpace(spaceId);
+		if (!space) return undefined;
+
+		const manifest = space.root(1);
+		if (manifest?.jcid !== Jcid.pageManifestNode
+			|| !this.#pageNodeOf(space, manifest)) return undefined;
+
+		const metadata = space.properties(space.root(2));
+		return dataRange(metadata, Property.isDeletedGraphSpaceContent) !== undefined;
 	}
 
 	#pageNodeOf(space: ResolvedSpace, manifest: ObjectDescriptor): ObjectDescriptor | undefined {
