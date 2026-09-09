@@ -99,6 +99,70 @@ Measured on a 725 MiB notebook: converting the `.onepkg` directly peaked at
 2,791 MiB; extracting it peaked at 4 MiB and converting one 60 MiB section at
 688 MiB.
 
+## When memory is capped: `--memory-budget`
+
+Everything above still scales with the section. `--memory-budget` does not — it
+converts through a path that indexes the file on disk and streams a page at a
+time, so the converter uses the number given whatever the section's size.
+
+```bash
+7zz x notebook.onepkg -o./sections
+node one2md.mjs ./sections -o ./out --notebook "My Notebook" \
+  --memory-budget 8M --temp-dir /var/tmp
+```
+
+The output is byte-identical to converting without the flag, so there is no
+reason to check the result differently.
+
+**It takes loose `.one` sections only.** Naming a `.onepkg` or `.onex` with
+`--memory-budget` set is an error, not a fallback: reaching a section inside one
+means expanding the Cabinet folder whole, which is the largest allocation this
+program makes and the thing a budget exists to avoid. Extract first — the
+workflow above is the workflow — and point it at the folder. An archive found
+by scanning a folder fails as that one input while the rest of the batch
+converts.
+
+**Use it when** a section will not fit in memory, or when the environment has a
+hard memory cap and an out-of-memory kill would be worse than an error. Do not
+reach for it by default: it is slower, because every lookup that was in memory
+is now a read, and it needs temporary disk on the order of the section's size.
+`--temp-dir` says where; each store makes and removes its own subdirectory and
+leaves the root alone.
+
+**What the number means.** Every buffer the converter allocates, plus a reserve
+for the record copies its stores hand out and one for the few values that
+cannot be streamed — a page title, a link target, a maths run. It does **not**
+cover Node and V8, which are tens of megabytes on their own, nor garbage not
+yet collected. `--memory-budget 8M` means the converter's memory is 8 MiB; the
+process will be larger, and no option changes that. The floor is 1 MiB; below
+it the budget is refused rather than under-provisioned.
+
+Measured: sections of 3.1 MiB and 12.4 MiB gave the same accounted high-water
+mark in both encodings, and every conversion fitted inside a 96 MiB V8 heap cap.
+Resident set size is *not* flat — it was 193 MiB and 241 MiB for those two — and
+that is Node and uncollected garbage rather than the converter, which is what
+the enforced heap cap distinguishes.
+
+**Cancelling.** Ctrl-C abandons the note in progress and deletes it, keeps the
+notes already finished, cleans up the temporary stores and exits **130**. It
+takes effect between pages, so allow up to one page — longer if that page holds
+a large attachment. A second Ctrl-C exits at once and still removes the note and
+asset being written. The report says `"ok": false` and marks the input
+`"cancelled": true`. Never treat a cancelled run as a complete one.
+
+New failures to expect, all reported per page or per input:
+
+- **`ONENOTE_VALUE_LIMIT`** — a title, link or maths run larger than the budget
+  reserved for one. Raise `--memory-budget`, which raises the ceiling with it.
+- **`ONENOTE_STRUCTURE_LIMIT`** — a table with more columns than the limit.
+- **`ONE2MD_BOUNDED_SCOPE`** — a `.onepkg` or `.onex` in bounded mode. Extract
+  it first.
+- **`ENOSPC` / `EDQUOT`** — the temporary disk filled up or hit a quota. Point
+  `--temp-dir` somewhere with room.
+- **`ONENOTE_INK_PATH_LIMIT`** — a stroke claiming more coordinates than
+  `--max-ink-path-values` allows. Ink is decoded a coordinate at a time, so this
+  is a malformed-file guard rather than a memory one.
+
 ## Options worth knowing
 
 | Need | Flag |
@@ -110,6 +174,7 @@ Measured on a 725 MiB notebook: converting the `.onepkg` directly peaked at
 | Re-run into a folder that already has output | `--overwrite` |
 | Raise a size ceiling a big archive trips | `--max-entry-bytes`, `--max-expanded-bytes` |
 | Bound memory per section on a small machine | `--max-objects` (lower it) |
+| Convert a loose `.one` under a fixed memory ceiling | `--memory-budget`, `--temp-dir` |
 
 By default each note gets YAML front matter with `title`, `onenote-id`,
 `section`, `created` and `updated`. Images, ink (as SVG) and embedded files land
